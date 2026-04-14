@@ -12,6 +12,9 @@ class CameraRecord:
     camera_type: str = ""
     lat: float | None = None
     lon: float | None = None
+    row_no: str = ""
+    uin: str = ""
+    address: str = ""
     cell_a1: str | None = None
     legacy_sheet_title: str = ""
     source_sheet_id: int = 0

@@ -36,9 +36,12 @@ def parse_lat_lon(raw: object) -> tuple[float | None, float | None]:
     return None, None
 
 
+# Порядок важен: «адрес объекта» раньше, чем url, чтобы не перепутать с колонкой ссылки.
 HEADER_ALIASES: dict[str, tuple[str, ...]] = {
-    "project": ("проект", "project", "объект", "object", "площадка"),
+    "row_no": ("№ п/п", "№п/п", "п/п", "номер по порядку", "№"),
+    "uin": ("уин", "uin"),
     "name": (
+        "наименование объекта",
         "наименование камеры",
         "наименование",
         "название",
@@ -47,23 +50,47 @@ HEADER_ALIASES: dict[str, tuple[str, ...]] = {
         "точка",
         "имя",
     ),
-    "url": ("rtsp", "rtsp link", "rtsp url", "url", "адрес", "ссылка", "поток", "link", "стрим"),
+    "address": ("адрес объекта", "адрес"),
+    "coord": (
+        "gps координаты",
+        "gps координат",
+        "gps",
+        "координата",
+        "координаты",
+        "geo",
+        "широта",
+        "location",
+        "map",
+    ),
+    "url": (
+        "ссылка на видеотрансляцию",
+        "видеотрансляцию",
+        "видеотрансляция",
+        "трансляция",
+        "rtsp",
+        "rtsp link",
+        "rtsp url",
+        "url",
+        "поток",
+        "link",
+        "стрим",
+    ),
     "camera_type": (
         "тип камеры",
+        "тип оборудования",
         "тип",
         "type",
         "модель",
         "model",
     ),
-    "coord": (
-        "координата",
-        "координаты",
-        "gps",
-        "geo",
-        "lat",
-        "широта",
-        "location",
-        "map",
+    "project": (
+        "проект",
+        "project",
+        "объект",
+        "площадка",
+        "назначение",
+        "вид работ",
+        "работы",
     ),
 }
 
@@ -96,9 +123,17 @@ def _map_header_row(header_cells: list[str]) -> dict[str, int] | None:
                 break
     if "url" not in col_map:
         return None
-    for k in ("project", "name", "camera_type", "coord"):
+    for k in HEADER_ALIASES:
         if k not in col_map:
             col_map[k] = -1
+
+    uc = col_map.get("url", -1)
+    if uc >= 0:
+        if col_map.get("camera_type", -1) == -1:
+            col_map["camera_type"] = uc + 1
+        if col_map.get("project", -1) == -1:
+            col_map["project"] = uc + 2
+
     return col_map
 
 
@@ -119,8 +154,6 @@ def _normalize_row(row: tuple) -> list[str]:
 
 
 def load_cameras_from_excel(path: Path) -> tuple[list[CameraRecord], str | None]:
-    from datetime import datetime, timezone
-
     if not path.is_file():
         return [], f"Файл не найден: {path} (загрузите .xlsx через форму)"
 
@@ -129,7 +162,7 @@ def load_cameras_from_excel(path: Path) -> tuple[list[CameraRecord], str | None]
         try:
             ws = wb[wb.sheetnames[0]]
             raw_rows = list(
-                ws.iter_rows(min_row=1, max_row=500, max_col=26, values_only=True)
+                ws.iter_rows(min_row=1, max_row=500, max_col=30, values_only=True)
             )
         finally:
             wb.close()
@@ -148,8 +181,19 @@ def load_cameras_from_excel(path: Path) -> tuple[list[CameraRecord], str | None]
 
     col_map = _map_header_row(rows[0])
     if not col_map:
-        col_map = {"project": 0, "name": 1, "url": 2, "camera_type": 3, "coord": 4}
-        log.info("заголовки не распознаны: A=проект B=наименование C=RTSP D=тип E=координата")
+        col_map = {
+            "row_no": 0,
+            "uin": 1,
+            "name": 2,
+            "address": 3,
+            "coord": 4,
+            "url": 5,
+            "camera_type": 6,
+            "project": 7,
+        }
+        log.info(
+            "заголовки не распознаны: A=№ B=УИН C=наименование D=адрес E=GPS F=ссылка G=тип H=проект"
+        )
 
     max_ci = max(col_map.values()) if col_map else 0
 
@@ -167,6 +211,9 @@ def load_cameras_from_excel(path: Path) -> tuple[list[CameraRecord], str | None]
         ct = _cell(row, col_map["camera_type"])
         coord_raw = _cell(row, col_map["coord"]) if col_map.get("coord", -1) >= 0 else ""
         lat, lon = parse_lat_lon(coord_raw)
+        rn = _cell(row, col_map["row_no"]) if col_map.get("row_no", -1) >= 0 else ""
+        uin = _cell(row, col_map["uin"]) if col_map.get("uin", -1) >= 0 else ""
+        addr = _cell(row, col_map["address"]) if col_map.get("address", -1) >= 0 else ""
         if not nm:
             nm = f"Строка {excel_row}"
         cid = f"E_{excel_row}"
@@ -181,6 +228,9 @@ def load_cameras_from_excel(path: Path) -> tuple[list[CameraRecord], str | None]
                 camera_type=ct,
                 lat=lat,
                 lon=lon,
+                row_no=rn,
+                uin=uin,
+                address=addr,
                 cell_a1=cell_a1,
             )
         )

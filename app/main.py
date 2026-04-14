@@ -234,8 +234,11 @@ def _camera_payload(c: CameraRecord) -> dict:
     st = _ping_state.get(c.camera_id, {})
     return {
         "camera_id": c.camera_id,
+        "row_no": c.row_no,
+        "uin": c.uin,
         "project": c.project,
         "name": c.name,
+        "address": c.address,
         "camera_type": c.camera_type,
         "cell": c.cell_a1,
         "rtsp_masked": mask_rtsp_url(c.rtsp_url),

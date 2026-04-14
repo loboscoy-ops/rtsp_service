@@ -74,7 +74,7 @@
       width: 100%;
       border-collapse: collapse;
       font-size: 0.86rem;
-      min-width: 800px;
+      min-width: 1100px;
     }
     th, td {
       padding: 0.55rem 0.65rem;
@@ -159,11 +159,14 @@
     <table>
       <thead>
         <tr>
+          <th>№ п/п</th>
+          <th>УИН</th>
+          <th>Наименование объекта</th>
+          <th>Адрес объекта</th>
+          <th>GPS</th>
+          <th>Тип</th>
           <th>Проект</th>
-          <th>Наименование камеры</th>
-          <th>RTSP</th>
-          <th>Тип камеры</th>
-          <th>Координата</th>
+          <th>Поток</th>
           <th>Статус</th>
         </tr>
       </thead>
@@ -382,8 +385,9 @@
         sheetsAccessEl.style.display = "none";
         if (data.excel_path) excelPathEl.textContent = "Файл: " + data.excel_path;
         modeHintEl.textContent =
-          "Режим Excel: первая строка — заголовки (Проект, Наименование камеры, RTSP link, тип камеры, координата). " +
-          "Координата: широта и долгота через запятую, например 55.7522, 37.6156. На карте: зелёный — online, красный — offline.";
+          "Режим Excel: колонки как в вашей таблице — № п/п, УИН, наименование объекта, адрес объекта, GPS координаты, " +
+          "ссылка на видеотрансляцию (RTSP), тип, проект. В таблице вместо ссылки — только кнопка просмотра. " +
+          "GPS: два числа через запятую. Карта: зелёный — online, красный — offline.";
       } else {
         excelUploadRow.style.display = "none";
         btnSheetsAccess.style.display = "inline-block";
@@ -405,7 +409,7 @@
       updateMap(data.cameras || []);
       if (!(data.cameras || []).length) {
         tbody.innerHTML =
-          "<tr><td colspan=\"6\" class=\"mono\">Нет камер. Загрузите .xlsx с колонкой RTSP или проверьте файл на диске.</td></tr>";
+          "<tr><td colspan=\"9\" class=\"mono\">Нет камер. Загрузите .xlsx (колонка «Ссылка на видеотрансляцию» с rtsp://…) или проверьте файл.</td></tr>";
         return;
       }
       for (const c of data.cameras) {
@@ -415,15 +419,16 @@
           ? "<div class=\"st-err\">" + escapeHtml(c.last_error) + "</div>"
           : "";
         tr.innerHTML =
-          "<td>" + escapeHtml(c.project || "—") + "</td>" +
+          "<td>" + escapeHtml(c.row_no || "—") + "</td>" +
+          "<td class=\"mono\">" + escapeHtml(c.uin || "—") + "</td>" +
           "<td>" + escapeHtml(c.name || "—") + "</td>" +
-          "<td class=\"mono\">" + escapeHtml(c.rtsp_masked || "") +
-          (c.cell ? " <span class=\"st-sub\">" + escapeHtml(c.cell) + "</span>" : "") +
-          "<div class=\"st-sub\"><button type=\"button\" class=\"secondary sm\" data-play=\"" +
-          escapeHtml(c.camera_id) + "\">ffplay</button> " +
-          "<button type=\"button\" class=\"sm\" data-ping=\"" + escapeHtml(c.camera_id) + "\">Ping</button></div></td>" +
-          "<td>" + escapeHtml(c.camera_type || "—") + "</td>" +
+          "<td>" + escapeHtml(c.address || "—") + "</td>" +
           "<td class=\"mono\">" + escapeHtml(fmtCoord(c)) + "</td>" +
+          "<td>" + escapeHtml(c.camera_type || "—") + "</td>" +
+          "<td>" + escapeHtml(c.project || "—") + "</td>" +
+          "<td><button type=\"button\" class=\"secondary\" data-play=\"" + escapeHtml(c.camera_id) +
+          "\">Просмотр потока</button><div class=\"st-sub\"><button type=\"button\" class=\"sm\" data-ping=\"" +
+          escapeHtml(c.camera_id) + "\">Ping</button></div></td>" +
           "<td>" + badge(c.online) +
           "<div class=\"st-sub\">Проверено: " + fmtTs(c.last_check_at) + "</div>" +
           "<div class=\"st-sub\">Последний online: " + fmtTs(c.last_seen_online) + "</div>" +

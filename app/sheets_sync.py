@@ -45,7 +45,7 @@ HEADER_ALIASES: dict[str, tuple[str, ...]] = {
         "model",
         "производитель",
     ),
-    "url": ("rtsp", "url", "адрес", "ссылка", "поток", "link", "стрим"),
+    "url": ("rtsp", "url", "ссылка на видеотрансляцию", "видеотрансляцию", "ссылка", "поток", "link", "стрим"),
 }
 
 
@@ -159,6 +159,9 @@ def _parse_table_sheet(
                 camera_type=ct,
                 lat=None,
                 lon=None,
+                row_no="",
+                uin="",
+                address="",
                 cell_a1=cell_a1,
             )
         )
@@ -323,6 +326,9 @@ def fetch_cameras_from_spreadsheet() -> SheetsState:
                 camera_type="",
                 lat=None,
                 lon=None,
+                row_no="",
+                uin="",
+                address="",
                 cell_a1=cell,
                 legacy_sheet_title=title,
             )
