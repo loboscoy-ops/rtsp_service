@@ -18,3 +18,9 @@ RTSP_FFPROBE_TIMEOUT_US = int(os.getenv("RTSP_FFPROBE_TIMEOUT_US", "8000000"))
 
 FFPROBE_BIN = os.getenv("FFPROBE_BIN", "ffprobe")
 FFPLAY_BIN = os.getenv("FFPLAY_BIN", "ffplay")
+
+# Сколько камер одновременно проверять ffprobe (остальные ждут в очереди)
+RTSP_PROBE_CONCURRENCY = max(1, int(os.getenv("RTSP_PROBE_CONCURRENCY", "4")))
+
+# CORS: через запятую, например http://127.0.0.1:3000 (пусто = отключено)
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "").strip()

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 import subprocess
@@ -60,11 +61,28 @@ async def _probe_camera(sheet_id: int) -> None:
     }
 
 
+async def _probe_many(sheet_ids: list[int]) -> None:
+    if not sheet_ids:
+        return
+    sem = asyncio.Semaphore(config.RTSP_PROBE_CONCURRENCY)
+
+    async def one(sid: int) -> None:
+        async with sem:
+            await _probe_camera(sid)
+
+    results = await asyncio.gather(
+        *(one(sid) for sid in sheet_ids),
+        return_exceptions=True,
+    )
+    for r in results:
+        if isinstance(r, Exception):
+            log.error("ошибка в пакетной проверке RTSP", exc_info=r)
+
+
 async def _probe_all_loop() -> None:
     while True:
         cameras = list(_sheets_state.cameras)
-        for c in cameras:
-            await _probe_camera(c.sheet_id)
+        await _probe_many([c.sheet_id for c in cameras])
         await asyncio.sleep(max(15, config.RTSP_PROBE_INTERVAL_SEC))
 
 
@@ -90,9 +108,26 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="RTSP Camera Service", lifespan=lifespan)
+
+_cors_origins = [o.strip() for o in config.CORS_ORIGINS.split(",") if o.strip()]
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
 static_dir = Path(__file__).resolve().parent.parent / "static"
 if static_dir.is_dir():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+
+def _spreadsheet_edit_url() -> str | None:
+    if not config.SPREADSHEET_ID:
+        return None
+    return f"https://docs.google.com/spreadsheets/d/{config.SPREADSHEET_ID}/edit"
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -116,6 +151,11 @@ def _camera_payload(c: CameraRecord) -> dict:
     }
 
 
+@app.get("/api/health")
+async def health():
+    return {"status": "ok", "service": "rtsp-camera-service"}
+
+
 @app.get("/api/cameras")
 async def list_cameras():
     async with _lock:
@@ -124,6 +164,7 @@ async def list_cameras():
         updated = _sheets_state.updated_at_iso
     return {
         "spreadsheet_id": config.SPREADSHEET_ID,
+        "spreadsheet_url": _spreadsheet_edit_url(),
         "sheets_updated_at": updated,
         "sheets_error": err,
         "cameras": [_camera_payload(c) for c in cams],
@@ -133,6 +174,14 @@ async def list_cameras():
 @app.post("/api/cameras/refresh-sheets")
 async def refresh_sheets():
     await _sync_sheets_once()
+    return await list_cameras()
+
+
+@app.post("/api/cameras/probe-all")
+async def probe_all():
+    async with _lock:
+        ids = [c.sheet_id for c in _sheets_state.cameras]
+    await _probe_many(ids)
     return await list_cameras()
 
 

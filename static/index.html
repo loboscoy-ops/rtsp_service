@@ -84,13 +84,24 @@
     .url { font-size: 0.78rem; color: var(--muted); word-break: break-all; margin: 0.5rem 0; }
     .err { font-size: 0.75rem; color: var(--bad); margin-top: 0.35rem; white-space: pre-wrap; }
     .actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.65rem; }
+    a.sheet-link {
+      color: var(--accent);
+      font-size: 0.85rem;
+      text-decoration: none;
+    }
+    a.sheet-link:hover { text-decoration: underline; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
   </style>
 </head>
 <body>
   <header>
     <h1>Камеры</h1>
     <span class="meta" id="updated"></span>
-    <button type="button" id="btn-refresh">Обновить таблицу</button>
+    <div class="toolbar">
+      <button type="button" id="btn-refresh">Обновить таблицу</button>
+      <button type="button" class="secondary" id="btn-probe-all">Проверить все</button>
+      <a class="sheet-link" id="sheet-link" href="#" style="display:none;" target="_blank" rel="noopener">Открыть таблицу</a>
+    </div>
   </header>
   <div id="alert" class="warn" style="display:none;"></div>
   <div class="grid" id="grid"></div>
@@ -99,7 +110,9 @@
     const grid = document.getElementById("grid");
     const alertEl = document.getElementById("alert");
     const updatedEl = document.getElementById("updated");
+    const sheetLink = document.getElementById("sheet-link");
     document.getElementById("btn-refresh").onclick = () => load(true);
+    document.getElementById("btn-probe-all").onclick = () => probeAll();
 
     function badge(online) {
       if (online === true) return '<span class="badge ok">В сети</span>';
@@ -107,15 +120,49 @@
       return '<span class="badge unk">Проверка…</span>';
     }
 
+    function showAlert(msg) {
+      alertEl.textContent = msg;
+      alertEl.style.display = "block";
+    }
+
+    function apiErrorText(t) {
+      if (!t || typeof t !== "object") return "";
+      const d = t.detail;
+      if (typeof d === "string") return d;
+      if (Array.isArray(d)) return d.map((x) => x.msg || JSON.stringify(x)).join("; ");
+      return "";
+    }
+
     async function load(refreshSheets) {
       alertEl.style.display = "none";
       const url = refreshSheets ? "/api/cameras/refresh-sheets" : "/api/cameras";
       const opt = refreshSheets ? { method: "POST" } : {};
-      const res = await fetch(url, opt);
-      const data = await res.json();
+      let res;
+      try {
+        res = await fetch(url, opt);
+      } catch (e) {
+        showAlert("Сеть: не удалось связаться с сервером (" + (e && e.message ? e.message : e) + ")");
+        return;
+      }
+      let data;
+      try {
+        data = await res.json();
+      } catch {
+        showAlert("Ответ сервера не JSON: " + res.status + " " + res.statusText);
+        return;
+      }
+      if (!res.ok) {
+        showAlert(apiErrorText(data) || res.status + " " + res.statusText);
+        return;
+      }
       if (data.sheets_error) {
-        alertEl.textContent = "Таблица: " + data.sheets_error;
-        alertEl.style.display = "block";
+        showAlert("Таблица: " + data.sheets_error);
+      }
+      if (data.spreadsheet_url) {
+        sheetLink.href = data.spreadsheet_url;
+        sheetLink.style.display = "inline";
+      } else {
+        sheetLink.style.display = "none";
       }
       updatedEl.textContent = data.sheets_updated_at
         ? "Данные таблицы: " + data.sheets_updated_at
@@ -155,10 +202,28 @@
           btn.disabled = false;
           if (!r.ok) {
             const t = await r.json().catch(() => ({}));
-            alert((t.detail) || r.statusText);
+            alert(apiErrorText(t) || (typeof t.detail === "string" ? t.detail : "") || r.statusText);
           }
         });
       });
+    }
+
+    async function probeAll() {
+      const btn = document.getElementById("btn-probe-all");
+      btn.disabled = true;
+      try {
+        const res = await fetch("/api/cameras/probe-all", { method: "POST" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          showAlert(apiErrorText(data) || res.statusText);
+          return;
+        }
+        await load(false);
+      } catch (e) {
+        showAlert("Сеть: " + (e && e.message ? e.message : e));
+      } finally {
+        btn.disabled = false;
+      }
     }
 
     function escapeHtml(s) {
