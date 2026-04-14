@@ -1,0 +1,13 @@
+.venv/
+.env
+*.pem
+credentials.json
+service-account.json
+*-service-account*.json
+__pycache__/
+*.py[cod]
+.Python
+.DS_Store
+.idea/
+.vscode/
+*.log

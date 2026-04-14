@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RTSP камеры</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --card: #1a2332;
+      --text: #e7ecf3;
+      --muted: #8b98a8;
+      --ok: #3ecf8e;
+      --bad: #f07178;
+      --accent: #5c9eff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "SF Pro Text", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 1.5rem;
+    }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 0.75rem 1.25rem;
+      margin-bottom: 1.25rem;
+    }
+    h1 { font-size: 1.35rem; font-weight: 600; margin: 0; }
+    .meta { color: var(--muted); font-size: 0.85rem; }
+    button {
+      background: var(--accent);
+      color: #0a0e14;
+      border: none;
+      padding: 0.45rem 0.85rem;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+    button.secondary { background: #2d3a4d; color: var(--text); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .warn {
+      background: #3d2a1a;
+      border: 1px solid #8a5a2a;
+      color: #f0c78a;
+      padding: 0.65rem 0.85rem;
+      border-radius: 8px;
+      font-size: 0.88rem;
+      margin-bottom: 1rem;
+    }
+    .grid {
+      display: grid;
+      gap: 0.75rem;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    }
+    .card {
+      background: var(--card);
+      border-radius: 12px;
+      padding: 1rem 1.1rem;
+      border: 1px solid #243044;
+    }
+    .card h2 {
+      margin: 0 0 0.35rem;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+    .badge {
+      display: inline-block;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      padding: 0.2rem 0.45rem;
+      border-radius: 6px;
+      text-transform: uppercase;
+    }
+    .badge.ok { background: rgba(62, 207, 142, 0.2); color: var(--ok); }
+    .badge.bad { background: rgba(240, 113, 120, 0.15); color: var(--bad); }
+    .badge.unk { background: #2d3544; color: var(--muted); }
+    .url { font-size: 0.78rem; color: var(--muted); word-break: break-all; margin: 0.5rem 0; }
+    .err { font-size: 0.75rem; color: var(--bad); margin-top: 0.35rem; white-space: pre-wrap; }
+    .actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.65rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Камеры</h1>
+    <span class="meta" id="updated"></span>
+    <button type="button" id="btn-refresh">Обновить таблицу</button>
+  </header>
+  <div id="alert" class="warn" style="display:none;"></div>
+  <div class="grid" id="grid"></div>
+
+  <script>
+    const grid = document.getElementById("grid");
+    const alertEl = document.getElementById("alert");
+    const updatedEl = document.getElementById("updated");
+    document.getElementById("btn-refresh").onclick = () => load(true);
+
+    function badge(online) {
+      if (online === true) return '<span class="badge ok">В сети</span>';
+      if (online === false) return '<span class="badge bad">Нет связи</span>';
+      return '<span class="badge unk">Проверка…</span>';
+    }
+
+    async function load(refreshSheets) {
+      alertEl.style.display = "none";
+      const url = refreshSheets ? "/api/cameras/refresh-sheets" : "/api/cameras";
+      const opt = refreshSheets ? { method: "POST" } : {};
+      const res = await fetch(url, opt);
+      const data = await res.json();
+      if (data.sheets_error) {
+        alertEl.textContent = "Таблица: " + data.sheets_error;
+        alertEl.style.display = "block";
+      }
+      updatedEl.textContent = data.sheets_updated_at
+        ? "Данные таблицы: " + data.sheets_updated_at
+        : "";
+      grid.innerHTML = "";
+      if (!data.cameras.length) {
+        grid.innerHTML = "<p class=\"meta\">Нет камер. Добавьте лист в Google Таблицу и ячейку с <code>rtsp://...</code> (первые 200 строк, колонки A–Z).</p>";
+        return;
+      }
+      for (const c of data.cameras) {
+        const card = document.createElement("div");
+        card.className = "card";
+        card.innerHTML = `
+          <h2>${escapeHtml(c.name)}</h2>
+          ${badge(c.online)}
+          <p class="url">${escapeHtml(c.rtsp_masked)}${c.cell ? " · " + escapeHtml(c.cell) : ""}</p>
+          ${c.last_error ? `<div class="err">${escapeHtml(c.last_error)}</div>` : ""}
+          <div class="actions">
+            <button type="button" data-probe="${c.sheet_id}">Проверить</button>
+            <button type="button" class="secondary" data-play="${c.sheet_id}">ffplay</button>
+          </div>
+        `;
+        grid.appendChild(card);
+      }
+      grid.querySelectorAll("[data-probe]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          await fetch("/api/cameras/" + btn.dataset.probe + "/probe", { method: "POST" });
+          await load(false);
+          btn.disabled = false;
+        });
+      });
+      grid.querySelectorAll("[data-play]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          const r = await fetch("/api/cameras/" + btn.dataset.play + "/ffplay", { method: "POST" });
+          btn.disabled = false;
+          if (!r.ok) {
+            const t = await r.json().catch(() => ({}));
+            alert((t.detail) || r.statusText);
+          }
+        });
+      });
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    load(false);
+    setInterval(() => load(false), 15000);
+  </script>
+</body>
+</html>
