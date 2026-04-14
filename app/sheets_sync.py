@@ -68,6 +68,7 @@ class SheetsState:
     last_error: str | None = None
     updated_at_iso: str | None = None
     table_mode: bool = False
+    table_sheet_title: str | None = None
 
 
 def _build_sheets_client():
@@ -244,10 +245,34 @@ def fetch_cameras_from_spreadsheet() -> SheetsState:
         if title:
             titles_to_props[title] = props
 
-    table_sheet_name = (config.CAMERAS_SHEET or "").strip()
-    if table_sheet_name and table_sheet_name in titles_to_props:
-        props = titles_to_props[table_sheet_name]
-        sheet_id = int(props.get("sheetId", 0))
+    table_props: dict | None = None
+    table_sheet_name: str = ""
+
+    if config.CAMERAS_SHEET_GID is not None:
+        want = int(config.CAMERAS_SHEET_GID)
+        for sh in sheets:
+            props = (sh or {}).get("properties") or {}
+            sid = int(props.get("sheetId", -1))
+            if sid == want:
+                table_props = props
+                table_sheet_name = (props.get("title") or "").strip() or f"gid{want}"
+                break
+        if table_props is None:
+            return SheetsState(
+                cameras=[],
+                last_error=f"Лист с gid={want} не найден в этой книге",
+                updated_at_iso=datetime.now(timezone.utc).isoformat(),
+                table_mode=True,
+                table_sheet_title=None,
+            )
+    else:
+        tname = (config.CAMERAS_SHEET or "").strip()
+        if tname and tname in titles_to_props:
+            table_props = titles_to_props[tname]
+            table_sheet_name = tname
+
+    if table_props is not None:
+        sheet_id = int(table_props.get("sheetId", 0))
         values = _fetch_sheet_values(service, config.SPREADSHEET_ID, table_sheet_name)
         if values is None:
             return SheetsState(
@@ -255,6 +280,7 @@ def fetch_cameras_from_spreadsheet() -> SheetsState:
                 last_error=f"Не удалось прочитать лист «{table_sheet_name}»",
                 updated_at_iso=datetime.now(timezone.utc).isoformat(),
                 table_mode=True,
+                table_sheet_title=table_sheet_name,
             )
         cameras = _parse_table_sheet(values, sheet_id, table_sheet_name)
         cameras.sort(key=lambda c: (c.project.lower(), c.name.lower()))
@@ -263,7 +289,10 @@ def fetch_cameras_from_spreadsheet() -> SheetsState:
             last_error=None,
             updated_at_iso=datetime.now(timezone.utc).isoformat(),
             table_mode=True,
+            table_sheet_title=table_sheet_name,
         )
+
+    name_for_legacy_skip = (config.CAMERAS_SHEET or "").strip()
 
     cameras: list[CameraRecord] = []
     for sh in sheets:
@@ -272,7 +301,7 @@ def fetch_cameras_from_spreadsheet() -> SheetsState:
         sheet_id = int(props.get("sheetId", 0))
         if not title or title in config.IGNORE_SHEETS:
             continue
-        if table_sheet_name and title == table_sheet_name:
+        if name_for_legacy_skip and title == name_for_legacy_skip:
             continue
 
         values = _fetch_sheet_values(service, config.SPREADSHEET_ID, title)
@@ -303,4 +332,5 @@ def fetch_cameras_from_spreadsheet() -> SheetsState:
         last_error=None,
         updated_at_iso=datetime.now(timezone.utc).isoformat(),
         table_mode=False,
+        table_sheet_title=None,
     )

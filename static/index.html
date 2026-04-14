@@ -261,9 +261,14 @@
       const pmin = Math.round((data.ping_interval_sec || 1800) / 60);
       pingHintEl.textContent = "Авто ping: раз в " + pmin + " мин";
       if (data.table_mode) {
+        const st = data.cameras_sheet_title
+          ? "«" + data.cameras_sheet_title + "»"
+          : (data.cameras_sheet_gid != null
+            ? "gid=" + data.cameras_sheet_gid
+            : "«" + (data.cameras_sheet || "Камеры") + "»");
         modeHintEl.textContent =
-          "Режим таблицы: лист «" + (data.cameras_sheet || "Камеры") +
-          "». Первая строка — заголовки (Проект, Наименование, Тип, URL с rtsp://). Дальше строки камер. " +
+          "Режим таблицы: лист " + st +
+          ". Первая строка — заголовки (Проект, Наименование, Тип, URL с rtsp://). Дальше строки камер. " +
           "Статус по ICMP ping: часть камер не отвечает на ping при рабочем RTSP — ориентируйтесь на ffplay.";
       } else {
         modeHintEl.textContent =

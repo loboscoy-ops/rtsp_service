@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 from pathlib import Path
 
@@ -8,7 +10,19 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "").strip()
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
 
-# Лист с таблицей камер (колонки проект / имя / тип / URL). Если листа с таким именем нет — старый режим: каждая вкладка = камера.
+# Лист с таблицей камер (колонки проект / имя / тип / URL).
+# CAMERAS_SHEET_GID — число из URL (...#gid=1450282054); если задано, имеет приоритет над именем листа.
+def _optional_int(name: str) -> int | None:
+    v = os.getenv(name, "").strip()
+    if not v:
+        return None
+    try:
+        return int(v)
+    except ValueError:
+        return None
+
+
+CAMERAS_SHEET_GID = _optional_int("CAMERAS_SHEET_GID")
 CAMERAS_SHEET = os.getenv("CAMERAS_SHEET", "Камеры").strip()
 IGNORE_SHEETS = frozenset(
     s.strip()

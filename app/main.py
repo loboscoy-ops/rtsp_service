@@ -240,6 +240,7 @@ async def list_cameras():
         err = _sheets_state.last_error
         updated = _sheets_state.updated_at_iso
         table_mode = _sheets_state.table_mode
+        table_sheet_title = _sheets_state.table_sheet_title
     return {
         "spreadsheet_id": config.SPREADSHEET_ID,
         "spreadsheet_url": _spreadsheet_edit_url(),
@@ -247,6 +248,8 @@ async def list_cameras():
         "sheets_error": err,
         "table_mode": table_mode,
         "cameras_sheet": config.CAMERAS_SHEET or None,
+        "cameras_sheet_gid": config.CAMERAS_SHEET_GID,
+        "cameras_sheet_title": table_sheet_title,
         "ping_interval_sec": config.PING_INTERVAL_SEC,
         "cameras": [_camera_payload(c) for c in cams],
         "logs": _recent_logs(150),
