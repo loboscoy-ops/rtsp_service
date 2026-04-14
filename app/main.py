@@ -4,24 +4,22 @@ import asyncio
 import logging
 from collections import deque
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 import subprocess
 
 from . import config
+from .excel_cameras import load_cameras_from_excel
 from .host_ping import host_from_rtsp_url, ping_host
+from .models import CameraRecord
 from .rtsp_probe import mask_rtsp_url
-from .sheets_sync import (
-    CameraRecord,
-    SheetsState,
-    check_spreadsheet_access,
-    fetch_cameras_from_spreadsheet,
-)
+from .sheets_sync import SheetsState, check_spreadsheet_access, fetch_cameras_from_spreadsheet
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,7 +27,18 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-_sheets_state: SheetsState = SheetsState()
+
+@dataclass
+class AppCameraState:
+    cameras: list[CameraRecord] = field(default_factory=list)
+    load_error: str | None = None
+    updated_at_iso: str | None = None
+    data_source: str = "excel"
+    table_mode: bool = False
+    table_sheet_title: str | None = None
+
+
+_state: AppCameraState = AppCameraState()
 _ping_state: dict[str, dict] = {}
 _status_logs: deque[dict] = deque(maxlen=config.STATUS_LOG_MAX)
 _lock = asyncio.Lock()
@@ -59,7 +68,7 @@ def _recent_logs(limit: int) -> list[dict]:
 
 
 def _camera_by_id(camera_id: str) -> CameraRecord | None:
-    for c in _sheets_state.cameras:
+    for c in _state.cameras:
         if c.camera_id == camera_id:
             return c
     return None
@@ -73,23 +82,38 @@ def _display_title(cam: CameraRecord) -> str:
     return cam.legacy_sheet_title or cam.camera_id
 
 
-async def _sync_sheets_once() -> None:
-    global _sheets_state
+async def _reload_data() -> None:
+    global _state
+    now_iso = datetime.now(timezone.utc).isoformat()
     async with _lock:
-        state = await asyncio.to_thread(fetch_cameras_from_spreadsheet)
-        _sheets_state = state
-        known = {c.camera_id for c in state.cameras}
+        if config.DATA_SOURCE == "excel":
+            cams, err = await asyncio.to_thread(
+                load_cameras_from_excel, config.EXCEL_CAMERAS_PATH
+            )
+            _state = AppCameraState(
+                cameras=cams,
+                load_error=err,
+                updated_at_iso=now_iso,
+                data_source="excel",
+            )
+        else:
+            ss: SheetsState = await asyncio.to_thread(fetch_cameras_from_spreadsheet)
+            _state = AppCameraState(
+                cameras=list(ss.cameras),
+                load_error=ss.last_error,
+                updated_at_iso=ss.updated_at_iso or now_iso,
+                data_source="sheets",
+                table_mode=ss.table_mode,
+                table_sheet_title=ss.table_sheet_title,
+            )
+        known = {c.camera_id for c in _state.cameras}
         for cid in list(_ping_state.keys()):
             if cid not in known:
                 _ping_state.pop(cid, None)
-    if state.last_error:
-        log.warning("синхронизация таблицы: %s", state.last_error)
+    if _state.load_error:
+        log.warning("загрузка данных: %s", _state.load_error)
     else:
-        log.info(
-            "камер: %s (%s)",
-            len(state.cameras),
-            "таблица" if state.table_mode else "по вкладкам",
-        )
+        log.info("камер: %s (источник=%s)", len(_state.cameras), _state.data_source)
 
 
 async def _ping_camera(camera_id: str) -> None:
@@ -111,13 +135,7 @@ async def _ping_camera(camera_id: str) -> None:
             "last_error": err,
         }
         _ping_state[camera_id] = st
-        _append_log(
-            camera_id,
-            cam.project,
-            cam.name,
-            False,
-            err,
-        )
+        _append_log(camera_id, cam.project, cam.name, False, err)
         return
 
     ok, err = await ping_host(host)
@@ -153,27 +171,28 @@ async def _ping_many(camera_ids: list[str]) -> None:
 
 async def _ping_all_loop() -> None:
     while True:
-        cameras = list(_sheets_state.cameras)
+        cameras = list(_state.cameras)
         await _ping_many([c.camera_id for c in cameras])
         await asyncio.sleep(max(60, config.PING_INTERVAL_SEC))
 
 
 async def _sheets_poll_loop() -> None:
     while True:
-        await _sync_sheets_once()
         await asyncio.sleep(max(30, config.SHEETS_POLL_INTERVAL_SEC))
+        await _reload_data()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await _sync_sheets_once()
-    await _ping_many([c.camera_id for c in _sheets_state.cameras])
-    t1 = asyncio.create_task(_sheets_poll_loop())
-    t2 = asyncio.create_task(_ping_all_loop())
+    await _reload_data()
+    await _ping_many([c.camera_id for c in _state.cameras])
+    tasks = [asyncio.create_task(_ping_all_loop())]
+    if config.DATA_SOURCE == "sheets":
+        tasks.append(asyncio.create_task(_sheets_poll_loop()))
     yield
-    t1.cancel()
-    t2.cancel()
-    for t in (t1, t2):
+    for t in tasks:
+        t.cancel()
+    for t in tasks:
         try:
             await t
         except asyncio.CancelledError:
@@ -220,6 +239,8 @@ def _camera_payload(c: CameraRecord) -> dict:
         "camera_type": c.camera_type,
         "cell": c.cell_a1,
         "rtsp_masked": mask_rtsp_url(c.rtsp_url),
+        "lat": c.lat,
+        "lon": c.lon,
         "ping_host": st.get("ping_host"),
         "online": st.get("online"),
         "last_error": st.get("last_error"),
@@ -235,7 +256,13 @@ async def health():
 
 @app.get("/api/sheets-access")
 async def sheets_access():
-    """Проверка ключа и прав: метаданные книги + чтение A1 целевого листа."""
+    if config.DATA_SOURCE != "sheets":
+        return {
+            "ok": True,
+            "skipped": True,
+            "message": "Активен режим Excel; Google Sheets не используется",
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+        }
     return await asyncio.to_thread(check_spreadsheet_access)
 
 
@@ -247,37 +274,75 @@ async def get_logs(limit: int = 200):
 @app.get("/api/cameras")
 async def list_cameras():
     async with _lock:
-        cams = list(_sheets_state.cameras)
-        err = _sheets_state.last_error
-        updated = _sheets_state.updated_at_iso
-        table_mode = _sheets_state.table_mode
-        table_sheet_title = _sheets_state.table_sheet_title
+        cams = list(_state.cameras)
+        err = _state.load_error
+        updated = _state.updated_at_iso
+        ds = _state.data_source
+        table_mode = _state.table_mode
+        table_sheet_title = _state.table_sheet_title
     return {
-        "spreadsheet_id": config.SPREADSHEET_ID,
-        "spreadsheet_url": _spreadsheet_edit_url(),
+        "data_source": ds,
+        "excel_path": str(config.EXCEL_CAMERAS_PATH) if ds == "excel" else None,
+        "load_error": err,
+        "spreadsheet_id": config.SPREADSHEET_ID if ds == "sheets" else None,
+        "spreadsheet_url": _spreadsheet_edit_url() if ds == "sheets" else None,
         "sheets_updated_at": updated,
-        "sheets_error": err,
+        "sheets_error": err if ds == "sheets" else None,
         "table_mode": table_mode,
         "cameras_sheet": config.CAMERAS_SHEET or None,
-        "cameras_sheet_gid": config.CAMERAS_SHEET_GID,
+        "cameras_sheet_gid": config.CAMERAS_SHEET_GID if ds == "sheets" else None,
         "cameras_sheet_title": table_sheet_title,
-        "sheets_auth_mode": config.SHEETS_AUTH_MODE,
+        "sheets_auth_mode": config.SHEETS_AUTH_MODE if ds == "sheets" else None,
         "ping_interval_sec": config.PING_INTERVAL_SEC,
         "cameras": [_camera_payload(c) for c in cams],
         "logs": _recent_logs(150),
     }
 
 
+@app.post("/api/cameras/upload-excel")
+async def upload_excel(file: UploadFile = File(...)):
+    if config.DATA_SOURCE != "excel":
+        raise HTTPException(
+            status_code=400,
+            detail="Загрузка Excel только при DATA_SOURCE=excel в .env",
+        )
+    name = (file.filename or "").lower()
+    if not name.endswith(".xlsx"):
+        raise HTTPException(
+            status_code=400,
+            detail="Нужен файл .xlsx (Excel 2007+)",
+        )
+    raw = await file.read()
+    if len(raw) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Файл слишком большой (макс. 15 МБ)")
+    path = config.EXCEL_CAMERAS_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(raw)
+    log.info("сохранён Excel: %s (%s байт)", path, len(raw))
+    await _reload_data()
+    return await list_cameras()
+
+
+@app.post("/api/cameras/reload-excel")
+async def reload_excel():
+    if config.DATA_SOURCE != "excel":
+        raise HTTPException(status_code=400, detail="Только для режима excel")
+    await _reload_data()
+    return await list_cameras()
+
+
 @app.post("/api/cameras/refresh-sheets")
 async def refresh_sheets():
-    await _sync_sheets_once()
+    if config.DATA_SOURCE != "sheets":
+        raise HTTPException(status_code=400, detail="Только для режима sheets")
+    await _reload_data()
     return await list_cameras()
 
 
 @app.post("/api/cameras/ping-all")
 async def ping_all():
     async with _lock:
-        ids = [c.camera_id for c in _sheets_state.cameras]
+        ids = [c.camera_id for c in _state.cameras]
     await _ping_many(ids)
     return await list_cameras()
 
@@ -317,11 +382,5 @@ async def launch_ffplay(camera_id: str):
     except Exception as e:
         log.exception("ffplay")
         raise HTTPException(status_code=500, detail=str(e)) from e
-    _append_log(
-        camera_id,
-        cam.project,
-        cam.name,
-        None,
-        "запуск ffplay",
-    )
+    _append_log(camera_id, cam.project, cam.name, None, "запуск ffplay")
     return {"ok": True, "message": "ffplay запущен"}

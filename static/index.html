@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>RTSP камеры</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <style>
     :root {
       --bg: #0f1419;
@@ -24,14 +25,8 @@
       min-height: 100vh;
       padding: 1.25rem 1.5rem 2rem;
     }
-    header {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: baseline;
-      gap: 0.6rem 1.25rem;
-      margin-bottom: 1rem;
-    }
-    h1 { font-size: 1.35rem; font-weight: 600; margin: 0; }
+    header { margin-bottom: 0.75rem; }
+    h1 { font-size: 1.35rem; font-weight: 600; margin: 0 0 0.5rem; }
     .meta { color: var(--muted); font-size: 0.82rem; }
     button {
       background: var(--accent);
@@ -55,13 +50,19 @@
       font-size: 0.85rem;
       margin-bottom: 0.85rem;
     }
-    .toolbar { display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; }
-    a.sheet-link {
-      color: var(--accent);
-      font-size: 0.82rem;
-      text-decoration: none;
-    }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; margin-bottom: 0.35rem; }
+    a.sheet-link { color: var(--accent); font-size: 0.82rem; text-decoration: none; }
     a.sheet-link:hover { text-decoration: underline; }
+    .upload-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.5rem 0 0.75rem; }
+    .upload-row input[type=file] { max-width: 220px; font-size: 0.8rem; color: var(--muted); }
+    #map {
+      height: 380px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      margin-bottom: 1rem;
+      background: #151a22;
+    }
+    .leaflet-container { font-family: inherit; }
     .wrap {
       overflow-x: auto;
       border: 1px solid var(--border);
@@ -73,7 +74,7 @@
       width: 100%;
       border-collapse: collapse;
       font-size: 0.86rem;
-      min-width: 720px;
+      min-width: 800px;
     }
     th, td {
       padding: 0.55rem 0.65rem;
@@ -105,12 +106,7 @@
     .badge.unk { background: #2d3544; color: var(--muted); }
     .st-sub { font-size: 0.74rem; color: var(--muted); margin-top: 0.25rem; line-height: 1.35; }
     .st-err { font-size: 0.72rem; color: var(--bad); margin-top: 0.2rem; max-width: 280px; }
-    h2.log-h {
-      font-size: 0.95rem;
-      font-weight: 600;
-      margin: 0 0 0.5rem;
-      color: var(--muted);
-    }
+    h2.log-h { font-size: 0.95rem; font-weight: 600; margin: 0 0 0.5rem; color: var(--muted); }
     .log-box {
       border: 1px solid var(--border);
       border-radius: 12px;
@@ -131,8 +127,8 @@
     .log-msg { word-break: break-word; }
     .log-msg.ok { color: var(--ok); }
     .log-msg.bad { color: var(--bad); }
-    .hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.35rem; max-width: 52rem; line-height: 1.45; }
-    #sheets-access { max-width: 40rem; line-height: 1.35; }
+    .hint { font-size: 0.8rem; color: var(--muted); margin: 0.35rem 0 0.5rem; max-width: 56rem; line-height: 1.45; }
+    #sheets-access { max-width: 48rem; line-height: 1.35; margin: 0.25rem 0 0; }
     #sheets-access.state-ok { color: var(--ok); }
     #sheets-access.state-bad { color: var(--bad); }
     #sheets-access.state-wait { color: var(--muted); }
@@ -141,26 +137,33 @@
 <body>
   <header>
     <h1>Камеры</h1>
-    <span class="meta" id="updated"></span>
-    <span class="meta" id="ping-hint"></span>
     <div class="toolbar">
-      <button type="button" id="btn-refresh">Обновить таблицу</button>
+      <span class="meta" id="updated"></span>
+      <span class="meta" id="ping-hint"></span>
+      <button type="button" id="btn-reload">Обновить данные</button>
       <button type="button" class="secondary" id="btn-ping-all">Ping всех</button>
-      <button type="button" class="secondary sm" id="btn-sheets-access">Проверить доступ к Google</button>
+      <button type="button" class="secondary sm" id="btn-sheets-access" style="display:none;">Проверить Google Sheets</button>
       <a class="sheet-link" id="sheet-link" href="#" style="display:none;" target="_blank" rel="noopener">Открыть таблицу</a>
     </div>
-    <p class="meta" id="sheets-access" style="width:100%; margin:0.35rem 0 0;">Проверка доступа к Google Sheets…</p>
+    <div class="upload-row" id="excel-upload-row">
+      <input type="file" id="file-xlsx" accept=".xlsx" />
+      <button type="button" id="btn-upload">Загрузить Excel</button>
+      <span class="meta" id="excel-path"></span>
+    </div>
+    <p class="meta" id="sheets-access" style="display:none;"></p>
   </header>
   <div id="alert" class="warn" style="display:none;"></div>
   <p class="hint" id="mode-hint"></p>
+  <div id="map"></div>
   <div class="wrap">
     <table>
       <thead>
         <tr>
           <th>Проект</th>
-          <th>Наименование</th>
+          <th>Наименование камеры</th>
+          <th>RTSP</th>
           <th>Тип камеры</th>
-          <th>Поток</th>
+          <th>Координата</th>
           <th>Статус</th>
         </tr>
       </thead>
@@ -170,7 +173,12 @@
   <h2 class="log-h">Журнал опросов (ping)</h2>
   <div class="log-box" id="log-box"></div>
 
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script>
+    let dataSource = "excel";
+    let mapInstance = null;
+    let markerLayer = null;
+
     const tbody = document.getElementById("tbody");
     const alertEl = document.getElementById("alert");
     const updatedEl = document.getElementById("updated");
@@ -179,12 +187,14 @@
     const sheetLink = document.getElementById("sheet-link");
     const logBox = document.getElementById("log-box");
     const sheetsAccessEl = document.getElementById("sheets-access");
-    document.getElementById("btn-refresh").onclick = async () => {
-      await load(true);
-      checkSheetsAccess();
-    };
+    const excelPathEl = document.getElementById("excel-path");
+    const excelUploadRow = document.getElementById("excel-upload-row");
+    const btnSheetsAccess = document.getElementById("btn-sheets-access");
+
+    document.getElementById("btn-reload").onclick = () => load(true);
     document.getElementById("btn-ping-all").onclick = () => pingAll();
-    document.getElementById("btn-sheets-access").onclick = () => checkSheetsAccess();
+    btnSheetsAccess.onclick = () => checkSheetsAccess();
+    document.getElementById("btn-upload").onclick = () => uploadExcel();
 
     function setSheetsAccessClass(state) {
       sheetsAccessEl.classList.remove("state-ok", "state-bad", "state-wait");
@@ -192,13 +202,19 @@
     }
 
     async function checkSheetsAccess() {
-      const btn = document.getElementById("btn-sheets-access");
-      btn.disabled = true;
+      if (dataSource !== "sheets") return;
+      btnSheetsAccess.disabled = true;
       setSheetsAccessClass("state-wait");
-      sheetsAccessEl.textContent = "Проверка доступа к Google Sheets…";
+      sheetsAccessEl.style.display = "block";
+      sheetsAccessEl.textContent = "Проверка Google Sheets…";
       try {
         const res = await fetch("/api/sheets-access");
         const d = await res.json().catch(() => ({}));
+        if (d.skipped) {
+          setSheetsAccessClass("state-wait");
+          sheetsAccessEl.textContent = d.message || "";
+          return;
+        }
         if (!res.ok) {
           setSheetsAccessClass("state-bad");
           sheetsAccessEl.textContent = "Google Sheets: " + (apiErrorText(d) || res.statusText);
@@ -211,28 +227,21 @@
           else if (d.auth_mode === "service_account") s += " [service account]";
           if (d.spreadsheet_title) s += " · «" + d.spreadsheet_title + "»";
           s += " · листов: " + (d.sheets_count ?? "—");
-          if (d.camera_sheet) {
-            if (d.camera_sheet.mode === "table") {
-              s += " · камеры: «" + (d.camera_sheet.title || "") + "» (gid " + d.camera_sheet.gid + ")";
-            } else {
-              s += " · " + (d.camera_sheet.message || "legacy");
-              if (d.camera_sheet.sample_sheet_title) {
-                s += ", тест чтения: «" + d.camera_sheet.sample_sheet_title + "»";
-              }
-            }
+          if (d.camera_sheet && d.camera_sheet.mode === "table") {
+            s += " · «" + (d.camera_sheet.title || "") + "» (gid " + d.camera_sheet.gid + ")";
           }
-          s += d.read_sample_ok ? " · чтение A1: OK" : " · чтение A1: —";
+          s += d.read_sample_ok ? " · A1: OK" : "";
           s += " · " + fmtTs(d.checked_at);
           sheetsAccessEl.textContent = s;
         } else {
           setSheetsAccessClass("state-bad");
-          sheetsAccessEl.textContent = "Google Sheets: нет доступа — " + (d.error || "неизвестная ошибка");
+          sheetsAccessEl.textContent = "Google Sheets: " + (d.error || "ошибка");
         }
       } catch (e) {
         setSheetsAccessClass("state-bad");
         sheetsAccessEl.textContent = "Google Sheets: сеть — " + (e && e.message ? e.message : e);
       } finally {
-        btn.disabled = false;
+        btnSheetsAccess.disabled = false;
       }
     }
 
@@ -244,6 +253,13 @@
           hour: "2-digit", minute: "2-digit", second: "2-digit",
         });
       } catch { return iso; }
+    }
+
+    function fmtCoord(c) {
+      if (c.lat != null && c.lon != null) {
+        return Number(c.lat).toFixed(5) + ", " + Number(c.lon).toFixed(5);
+      }
+      return "—";
     }
 
     function badge(online) {
@@ -285,88 +301,132 @@
       }
     }
 
-    async function load(refreshSheets) {
+    function markerColor(online) {
+      if (online === true) return "#3ecf8e";
+      if (online === false) return "#f07178";
+      return "#8b98a8";
+    }
+
+    function updateMap(cameras) {
+      const withC = (cameras || []).filter(function (c) {
+        return c.lat != null && c.lon != null && !isNaN(c.lat) && !isNaN(c.lon);
+      });
+      if (typeof L === "undefined") return;
+      if (!mapInstance) {
+        mapInstance = L.map("map", { scrollWheelZoom: true }).setView([55.751244, 37.618423], 10);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: "&copy; OpenStreetMap",
+          maxZoom: 19,
+        }).addTo(mapInstance);
+        markerLayer = L.layerGroup().addTo(mapInstance);
+      }
+      markerLayer.clearLayers();
+      const bounds = [];
+      withC.forEach(function (c) {
+        const col = markerColor(c.online);
+        const m = L.circleMarker([c.lat, c.lon], {
+          radius: 10,
+          color: "#1a2332",
+          weight: 2,
+          fillColor: col,
+          fillOpacity: 0.95,
+        });
+        const title = [c.project, c.name].filter(Boolean).join(" — ") || c.camera_id;
+        m.bindPopup(
+          "<b>" + escapeHtml(title) + "</b><br>" +
+          badge(c.online) +
+          "<br><span style='font-size:11px;color:#666'>" + escapeHtml(fmtCoord(c)) + "</span>"
+        );
+        m.addTo(markerLayer);
+        bounds.push([c.lat, c.lon]);
+      });
+      if (bounds.length === 1) {
+        mapInstance.setView(bounds[0], 14);
+      } else if (bounds.length > 1) {
+        mapInstance.fitBounds(bounds, { padding: [36, 36], maxZoom: 15 });
+      }
+    }
+
+    async function load(reload) {
       alertEl.style.display = "none";
-      const url = refreshSheets ? "/api/cameras/refresh-sheets" : "/api/cameras";
-      const opt = refreshSheets ? { method: "POST" } : {};
+      const url = reload
+        ? (dataSource === "sheets" ? "/api/cameras/refresh-sheets" : "/api/cameras/reload-excel")
+        : "/api/cameras";
+      const opt = reload ? { method: "POST" } : {};
       let res;
       try {
         res = await fetch(url, opt);
       } catch (e) {
-        showAlert("Сеть: не удалось связаться с сервером (" + (e && e.message ? e.message : e) + ")");
+        showAlert("Сеть: " + (e && e.message ? e.message : e));
         return;
       }
       let data;
       try {
         data = await res.json();
       } catch {
-        showAlert("Ответ сервера не JSON: " + res.status + " " + res.statusText);
+        showAlert("Ответ не JSON: " + res.status);
         return;
       }
       if (!res.ok) {
-        showAlert(apiErrorText(data) || res.status + " " + res.statusText);
+        showAlert(apiErrorText(data) || res.statusText);
         return;
       }
-      if (data.sheets_error) {
-        showAlert("Таблица: " + data.sheets_error);
+      dataSource = data.data_source || "excel";
+      const loadErr = data.load_error || data.sheets_error;
+      if (loadErr) {
+        showAlert(loadErr);
       }
+      if (dataSource === "excel") {
+        excelUploadRow.style.display = "flex";
+        btnSheetsAccess.style.display = "none";
+        sheetsAccessEl.style.display = "none";
+        if (data.excel_path) excelPathEl.textContent = "Файл: " + data.excel_path;
+        modeHintEl.textContent =
+          "Режим Excel: первая строка — заголовки (Проект, Наименование камеры, RTSP link, тип камеры, координата). " +
+          "Координата: широта и долгота через запятую, например 55.7522, 37.6156. На карте: зелёный — online, красный — offline.";
+      } else {
+        excelUploadRow.style.display = "none";
+        btnSheetsAccess.style.display = "inline-block";
+        sheetsAccessEl.style.display = "block";
+        modeHintEl.textContent = "Режим Google Sheets (DATA_SOURCE=sheets).";
+        checkSheetsAccess();
+      }
+      updatedEl.textContent = data.sheets_updated_at ? "Данные: " + fmtTs(data.sheets_updated_at) : "";
+      const pmin = Math.round((data.ping_interval_sec || 1800) / 60);
+      pingHintEl.textContent = "Авто ping: раз в " + pmin + " мин";
       if (data.spreadsheet_url) {
         sheetLink.href = data.spreadsheet_url;
         sheetLink.style.display = "inline";
       } else {
         sheetLink.style.display = "none";
       }
-      updatedEl.textContent = data.sheets_updated_at
-        ? "Данные: " + fmtTs(data.sheets_updated_at)
-        : "";
-      const pmin = Math.round((data.ping_interval_sec || 1800) / 60);
-      pingHintEl.textContent = "Авто ping: раз в " + pmin + " мин";
-      if (data.table_mode) {
-        const st = data.cameras_sheet_title
-          ? "«" + data.cameras_sheet_title + "»"
-          : (data.cameras_sheet_gid != null
-            ? "gid=" + data.cameras_sheet_gid
-            : "«" + (data.cameras_sheet || "Камеры") + "»");
-        modeHintEl.textContent =
-          "Режим таблицы: лист " + st +
-          ". Первая строка — заголовки (Проект, Наименование, Тип, URL с rtsp://). Дальше строки камер. " +
-          "Статус по ICMP ping: часть камер не отвечает на ping при рабочем RTSP — ориентируйтесь на ffplay.";
-      } else {
-        modeHintEl.textContent =
-          "Режим по вкладкам: на каждом листе ищется RTSP URL. Чтобы использовать колонки Проект / Камера / Тип, создайте лист «" +
-          (data.cameras_sheet || "Камеры") + "» с таблицей. Статус — по ping хоста из URL.";
-      }
       tbody.innerHTML = "";
       renderLogs(data.logs);
-      if (!data.cameras.length) {
+      updateMap(data.cameras || []);
+      if (!(data.cameras || []).length) {
         tbody.innerHTML =
-          "<tr><td colspan=\"5\" class=\"mono\">Нет камер. " +
-          (data.table_mode
-            ? "Добавьте строки с заполненным RTSP в колонке URL."
-            : "Добавьте лист с ячейкой rtsp://… или лист «Камеры» с таблицей.") +
-          "</td></tr>";
+          "<tr><td colspan=\"6\" class=\"mono\">Нет камер. Загрузите .xlsx с колонкой RTSP или проверьте файл на диске.</td></tr>";
         return;
       }
       for (const c of data.cameras) {
         const tr = document.createElement("tr");
-        const hostLine = c.ping_host
-          ? "<div class=\"st-sub\">ping → " + escapeHtml(c.ping_host) + "</div>"
-          : "";
+        const hostLine = c.ping_host ? "<div class=\"st-sub\">ping → " + escapeHtml(c.ping_host) + "</div>" : "";
         const errLine = c.last_error && c.online === false
           ? "<div class=\"st-err\">" + escapeHtml(c.last_error) + "</div>"
           : "";
         tr.innerHTML =
           "<td>" + escapeHtml(c.project || "—") + "</td>" +
           "<td>" + escapeHtml(c.name || "—") + "</td>" +
-          "<td>" + escapeHtml(c.camera_type || "—") + "</td>" +
           "<td class=\"mono\">" + escapeHtml(c.rtsp_masked || "") +
           (c.cell ? " <span class=\"st-sub\">" + escapeHtml(c.cell) + "</span>" : "") +
           "<div class=\"st-sub\"><button type=\"button\" class=\"secondary sm\" data-play=\"" +
-          escapeHtml(c.camera_id) + "\">Открыть RTSP (ffplay)</button>" +
-          " <button type=\"button\" class=\"sm\" data-ping=\"" + escapeHtml(c.camera_id) + "\">Ping</button></div></td>" +
+          escapeHtml(c.camera_id) + "\">ffplay</button> " +
+          "<button type=\"button\" class=\"sm\" data-ping=\"" + escapeHtml(c.camera_id) + "\">Ping</button></div></td>" +
+          "<td>" + escapeHtml(c.camera_type || "—") + "</td>" +
+          "<td class=\"mono\">" + escapeHtml(fmtCoord(c)) + "</td>" +
           "<td>" + badge(c.online) +
           "<div class=\"st-sub\">Проверено: " + fmtTs(c.last_check_at) + "</div>" +
-          "<div class=\"st-sub\">В сети (ping OK): " + fmtTs(c.last_seen_online) + "</div>" +
+          "<div class=\"st-sub\">Последний online: " + fmtTs(c.last_seen_online) + "</div>" +
           hostLine + errLine + "</td>";
         tbody.appendChild(tr);
       }
@@ -391,6 +451,31 @@
           btn.disabled = false;
         });
       });
+    }
+
+    async function uploadExcel() {
+      const inp = document.getElementById("file-xlsx");
+      if (!inp.files || !inp.files[0]) {
+        alert("Выберите файл .xlsx");
+        return;
+      }
+      const fd = new FormData();
+      fd.append("file", inp.files[0]);
+      const btn = document.getElementById("btn-upload");
+      btn.disabled = true;
+      try {
+        const res = await fetch("/api/cameras/upload-excel", { method: "POST", body: fd });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          showAlert(apiErrorText(data) || res.statusText);
+          return;
+        }
+        await load(false);
+      } catch (e) {
+        showAlert("Сеть: " + (e && e.message ? e.message : e));
+      } finally {
+        btn.disabled = false;
+      }
     }
 
     async function pingAll() {
@@ -420,9 +505,8 @@
     }
 
     load(false);
-    checkSheetsAccess();
     setInterval(() => load(false), 20000);
-    setInterval(() => checkSheetsAccess(), 5 * 60 * 1000);
+    setInterval(() => { if (dataSource === "sheets") checkSheetsAccess(); }, 5 * 60 * 1000);
   </script>
 </body>
 </html>

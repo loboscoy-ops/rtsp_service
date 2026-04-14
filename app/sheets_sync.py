@@ -8,6 +8,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from . import config
+from .models import CameraRecord
 from .rtsp_probe import looks_like_rtsp_url
 
 log = logging.getLogger(__name__)
@@ -46,20 +47,6 @@ HEADER_ALIASES: dict[str, tuple[str, ...]] = {
     ),
     "url": ("rtsp", "url", "адрес", "ссылка", "поток", "link", "стрим"),
 }
-
-
-@dataclass
-class CameraRecord:
-    """camera_id: T_{sheet_gid}_{excel_row} в режиме таблицы, L_{sheet_gid} в legacy."""
-
-    camera_id: str
-    source_sheet_id: int
-    rtsp_url: str
-    project: str = ""
-    name: str = ""
-    camera_type: str = ""
-    cell_a1: str | None = None
-    legacy_sheet_title: str = ""
 
 
 @dataclass
@@ -170,6 +157,8 @@ def _parse_table_sheet(
                 project=pj,
                 name=nm,
                 camera_type=ct,
+                lat=None,
+                lon=None,
                 cell_a1=cell_a1,
             )
         )
@@ -332,6 +321,8 @@ def fetch_cameras_from_spreadsheet() -> SheetsState:
                 project="",
                 name=title,
                 camera_type="",
+                lat=None,
+                lon=None,
                 cell_a1=cell,
                 legacy_sheet_title=title,
             )

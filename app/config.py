@@ -7,6 +7,18 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
+_ROOT = Path(__file__).resolve().parent.parent
+
+# Источник списка камер: excel (файл .xlsx) или sheets (Google Таблица)
+DATA_SOURCE = os.getenv("DATA_SOURCE", "excel").strip().lower()
+if DATA_SOURCE not in ("excel", "sheets"):
+    DATA_SOURCE = "excel"
+
+_excel_path_raw = os.getenv("EXCEL_CAMERAS_PATH", "").strip()
+EXCEL_CAMERAS_PATH = (
+    Path(_excel_path_raw) if _excel_path_raw else (_ROOT / "data" / "cameras.xlsx")
+)
+
 # Ваша книга по умолчанию (можно переопределить в .env)
 _DEFAULT_SPREADSHEET_ID = "1sYMmVZTjE136vruKJx1hh-gkwax_AtFWHrnO8x2xWkw"
 _DEFAULT_CAMERAS_SHEET_GID = 1450282054
