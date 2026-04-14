@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,7 +14,8 @@ from fastapi.staticfiles import StaticFiles
 import subprocess
 
 from . import config
-from .rtsp_probe import mask_rtsp_url, probe_rtsp_reachable
+from .host_ping import host_from_rtsp_url, ping_host
+from .rtsp_probe import mask_rtsp_url
 from .sheets_sync import CameraRecord, SheetsState, fetch_cameras_from_spreadsheet
 
 logging.basicConfig(
@@ -23,15 +25,47 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 _sheets_state: SheetsState = SheetsState()
-_rtsp_status: dict[int, dict] = {}
+_ping_state: dict[str, dict] = {}
+_status_logs: deque[dict] = deque(maxlen=config.STATUS_LOG_MAX)
 _lock = asyncio.Lock()
 
 
-def _camera_by_sheet_id(sheet_id: int) -> CameraRecord | None:
+def _append_log(
+    camera_id: str,
+    project: str,
+    name: str,
+    ok: bool | None,
+    message: str,
+) -> None:
+    entry = {
+        "at": datetime.now(timezone.utc).isoformat(),
+        "camera_id": camera_id,
+        "project": project,
+        "name": name,
+        "ok": ok,
+        "message": message[:800],
+    }
+    _status_logs.append(entry)
+
+
+def _recent_logs(limit: int) -> list[dict]:
+    n = max(1, min(limit, config.STATUS_LOG_MAX))
+    return list(_status_logs)[-n:][::-1]
+
+
+def _camera_by_id(camera_id: str) -> CameraRecord | None:
     for c in _sheets_state.cameras:
-        if c.sheet_id == sheet_id:
+        if c.camera_id == camera_id:
             return c
     return None
+
+
+def _display_title(cam: CameraRecord) -> str:
+    if cam.project and cam.name:
+        return f"{cam.project} — {cam.name}"
+    if cam.name:
+        return cam.name
+    return cam.legacy_sheet_title or cam.camera_id
 
 
 async def _sync_sheets_once() -> None:
@@ -39,51 +73,84 @@ async def _sync_sheets_once() -> None:
     async with _lock:
         state = await asyncio.to_thread(fetch_cameras_from_spreadsheet)
         _sheets_state = state
-        known = {c.sheet_id for c in state.cameras}
-        for sid in list(_rtsp_status.keys()):
-            if sid not in known:
-                _rtsp_status.pop(sid, None)
+        known = {c.camera_id for c in state.cameras}
+        for cid in list(_ping_state.keys()):
+            if cid not in known:
+                _ping_state.pop(cid, None)
     if state.last_error:
         log.warning("синхронизация таблицы: %s", state.last_error)
     else:
-        log.info("камер из таблицы: %s", len(state.cameras))
+        log.info(
+            "камер: %s (%s)",
+            len(state.cameras),
+            "таблица" if state.table_mode else "по вкладкам",
+        )
 
 
-async def _probe_camera(sheet_id: int) -> None:
-    cam = _camera_by_sheet_id(sheet_id)
+async def _ping_camera(camera_id: str) -> None:
+    cam = _camera_by_id(camera_id)
     if not cam:
         return
-    ok, err = await probe_rtsp_reachable(cam.rtsp_url)
-    _rtsp_status[sheet_id] = {
-        "online": ok,
-        "error": err,
-        "checked_at": datetime.now(timezone.utc).isoformat(),
-    }
+    host = host_from_rtsp_url(cam.rtsp_url)
+    prev = _ping_state.get(camera_id, {})
+    now_iso = datetime.now(timezone.utc).isoformat()
 
-
-async def _probe_many(sheet_ids: list[int]) -> None:
-    if not sheet_ids:
+    if not host:
+        ok = False
+        err = "не удалось извлечь хост из RTSP URL"
+        st = {
+            "online": False,
+            "last_check_at": now_iso,
+            "last_seen_online": prev.get("last_seen_online"),
+            "ping_host": None,
+            "last_error": err,
+        }
+        _ping_state[camera_id] = st
+        _append_log(
+            camera_id,
+            cam.project,
+            cam.name,
+            False,
+            err,
+        )
         return
-    sem = asyncio.Semaphore(config.RTSP_PROBE_CONCURRENCY)
 
-    async def one(sid: int) -> None:
+    ok, err = await ping_host(host)
+    st = {
+        "online": ok,
+        "last_check_at": now_iso,
+        "last_seen_online": now_iso if ok else prev.get("last_seen_online"),
+        "ping_host": host,
+        "last_error": err,
+    }
+    _ping_state[camera_id] = st
+    msg = f"ping {host} OK" if ok else f"ping {host} FAIL: {err or 'нет ответа'}"
+    _append_log(camera_id, cam.project, cam.name, ok, msg)
+
+
+async def _ping_many(camera_ids: list[str]) -> None:
+    if not camera_ids:
+        return
+    sem = asyncio.Semaphore(config.PING_CONCURRENCY)
+
+    async def one(cid: str) -> None:
         async with sem:
-            await _probe_camera(sid)
+            await _ping_camera(cid)
 
     results = await asyncio.gather(
-        *(one(sid) for sid in sheet_ids),
+        *(one(cid) for cid in camera_ids),
         return_exceptions=True,
     )
     for r in results:
         if isinstance(r, Exception):
-            log.error("ошибка в пакетной проверке RTSP", exc_info=r)
+            log.error("ошибка в пакетном ping", exc_info=r)
 
 
-async def _probe_all_loop() -> None:
+async def _ping_all_loop() -> None:
     while True:
         cameras = list(_sheets_state.cameras)
-        await _probe_many([c.sheet_id for c in cameras])
-        await asyncio.sleep(max(15, config.RTSP_PROBE_INTERVAL_SEC))
+        await _ping_many([c.camera_id for c in cameras])
+        await asyncio.sleep(max(60, config.PING_INTERVAL_SEC))
 
 
 async def _sheets_poll_loop() -> None:
@@ -95,8 +162,9 @@ async def _sheets_poll_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await _sync_sheets_once()
+    await _ping_many([c.camera_id for c in _sheets_state.cameras])
     t1 = asyncio.create_task(_sheets_poll_loop())
-    t2 = asyncio.create_task(_probe_all_loop())
+    t2 = asyncio.create_task(_ping_all_loop())
     yield
     t1.cancel()
     t2.cancel()
@@ -139,15 +207,19 @@ async def root():
 
 
 def _camera_payload(c: CameraRecord) -> dict:
-    st = _rtsp_status.get(c.sheet_id, {})
+    st = _ping_state.get(c.camera_id, {})
     return {
-        "sheet_id": c.sheet_id,
-        "name": c.sheet_title,
+        "camera_id": c.camera_id,
+        "project": c.project,
+        "name": c.name,
+        "camera_type": c.camera_type,
         "cell": c.cell_a1,
         "rtsp_masked": mask_rtsp_url(c.rtsp_url),
+        "ping_host": st.get("ping_host"),
         "online": st.get("online"),
-        "last_error": st.get("error"),
-        "checked_at": st.get("checked_at"),
+        "last_error": st.get("last_error"),
+        "last_check_at": st.get("last_check_at"),
+        "last_seen_online": st.get("last_seen_online"),
     }
 
 
@@ -156,18 +228,28 @@ async def health():
     return {"status": "ok", "service": "rtsp-camera-service"}
 
 
+@app.get("/api/logs")
+async def get_logs(limit: int = 200):
+    return {"logs": _recent_logs(limit)}
+
+
 @app.get("/api/cameras")
 async def list_cameras():
     async with _lock:
         cams = list(_sheets_state.cameras)
         err = _sheets_state.last_error
         updated = _sheets_state.updated_at_iso
+        table_mode = _sheets_state.table_mode
     return {
         "spreadsheet_id": config.SPREADSHEET_ID,
         "spreadsheet_url": _spreadsheet_edit_url(),
         "sheets_updated_at": updated,
         "sheets_error": err,
+        "table_mode": table_mode,
+        "cameras_sheet": config.CAMERAS_SHEET or None,
+        "ping_interval_sec": config.PING_INTERVAL_SEC,
         "cameras": [_camera_payload(c) for c in cams],
+        "logs": _recent_logs(150),
     }
 
 
@@ -177,34 +259,35 @@ async def refresh_sheets():
     return await list_cameras()
 
 
-@app.post("/api/cameras/probe-all")
-async def probe_all():
+@app.post("/api/cameras/ping-all")
+async def ping_all():
     async with _lock:
-        ids = [c.sheet_id for c in _sheets_state.cameras]
-    await _probe_many(ids)
+        ids = [c.camera_id for c in _sheets_state.cameras]
+    await _ping_many(ids)
     return await list_cameras()
 
 
-@app.post("/api/cameras/{sheet_id}/probe")
-async def probe_one(sheet_id: int):
-    cam = _camera_by_sheet_id(sheet_id)
+@app.post("/api/cameras/{camera_id}/ping")
+async def ping_one(camera_id: str):
+    cam = _camera_by_id(camera_id)
     if not cam:
         raise HTTPException(status_code=404, detail="Камера не найдена")
-    await _probe_camera(sheet_id)
+    await _ping_camera(camera_id)
     return _camera_payload(cam)
 
 
-@app.post("/api/cameras/{sheet_id}/ffplay")
-async def launch_ffplay(sheet_id: int):
-    cam = _camera_by_sheet_id(sheet_id)
+@app.post("/api/cameras/{camera_id}/ffplay")
+async def launch_ffplay(camera_id: str):
+    cam = _camera_by_id(camera_id)
     if not cam:
         raise HTTPException(status_code=404, detail="Камера не найдена")
+    title = _display_title(cam)
     cmd = [
         config.FFPLAY_BIN,
         "-rtsp_transport",
         "tcp",
         "-window_title",
-        f"RTSP: {cam.sheet_title}",
+        f"RTSP: {title}",
         "-loglevel",
         "warning",
         cam.rtsp_url,
@@ -219,4 +302,11 @@ async def launch_ffplay(sheet_id: int):
     except Exception as e:
         log.exception("ffplay")
         raise HTTPException(status_code=500, detail=str(e)) from e
-    return {"ok": True, "message": "ffplay запущен", "command": " ".join(cmd[:6]) + " <url>"}
+    _append_log(
+        camera_id,
+        cam.project,
+        cam.name,
+        None,
+        "запуск ffplay",
+    )
+    return {"ok": True, "message": "ffplay запущен"}

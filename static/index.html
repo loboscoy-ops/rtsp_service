@@ -13,6 +13,7 @@
       --ok: #3ecf8e;
       --bad: #f07178;
       --accent: #5c9eff;
+      --border: #243044;
     }
     * { box-sizing: border-box; }
     body {
@@ -21,103 +22,173 @@
       background: var(--bg);
       color: var(--text);
       min-height: 100vh;
-      padding: 1.5rem;
+      padding: 1.25rem 1.5rem 2rem;
     }
     header {
       display: flex;
       flex-wrap: wrap;
       align-items: baseline;
-      gap: 0.75rem 1.25rem;
-      margin-bottom: 1.25rem;
+      gap: 0.6rem 1.25rem;
+      margin-bottom: 1rem;
     }
     h1 { font-size: 1.35rem; font-weight: 600; margin: 0; }
-    .meta { color: var(--muted); font-size: 0.85rem; }
+    .meta { color: var(--muted); font-size: 0.82rem; }
     button {
       background: var(--accent);
       color: #0a0e14;
       border: none;
-      padding: 0.45rem 0.85rem;
+      padding: 0.4rem 0.8rem;
       border-radius: 8px;
       font-weight: 600;
       cursor: pointer;
-      font-size: 0.85rem;
+      font-size: 0.82rem;
     }
+    button.sm { padding: 0.28rem 0.55rem; font-size: 0.75rem; }
     button.secondary { background: #2d3a4d; color: var(--text); }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
     .warn {
       background: #3d2a1a;
       border: 1px solid #8a5a2a;
       color: #f0c78a;
-      padding: 0.65rem 0.85rem;
+      padding: 0.55rem 0.75rem;
       border-radius: 8px;
-      font-size: 0.88rem;
-      margin-bottom: 1rem;
+      font-size: 0.85rem;
+      margin-bottom: 0.85rem;
     }
-    .grid {
-      display: grid;
-      gap: 0.75rem;
-      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    .toolbar { display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; }
+    a.sheet-link {
+      color: var(--accent);
+      font-size: 0.82rem;
+      text-decoration: none;
     }
-    .card {
-      background: var(--card);
+    a.sheet-link:hover { text-decoration: underline; }
+    .wrap {
+      overflow-x: auto;
+      border: 1px solid var(--border);
       border-radius: 12px;
-      padding: 1rem 1.1rem;
-      border: 1px solid #243044;
+      background: var(--card);
+      margin-bottom: 1.5rem;
     }
-    .card h2 {
-      margin: 0 0 0.35rem;
-      font-size: 1rem;
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.86rem;
+      min-width: 720px;
+    }
+    th, td {
+      padding: 0.55rem 0.65rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    th {
+      color: var(--muted);
       font-weight: 600;
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      background: rgba(0,0,0,0.2);
     }
+    tr:last-child td { border-bottom: none; }
+    .mono { font-family: ui-monospace, monospace; font-size: 0.78rem; color: var(--muted); word-break: break-all; }
     .badge {
       display: inline-block;
-      font-size: 0.72rem;
+      font-size: 0.68rem;
       font-weight: 700;
-      letter-spacing: 0.04em;
-      padding: 0.2rem 0.45rem;
+      letter-spacing: 0.03em;
+      padding: 0.18rem 0.42rem;
       border-radius: 6px;
       text-transform: uppercase;
     }
     .badge.ok { background: rgba(62, 207, 142, 0.2); color: var(--ok); }
     .badge.bad { background: rgba(240, 113, 120, 0.15); color: var(--bad); }
     .badge.unk { background: #2d3544; color: var(--muted); }
-    .url { font-size: 0.78rem; color: var(--muted); word-break: break-all; margin: 0.5rem 0; }
-    .err { font-size: 0.75rem; color: var(--bad); margin-top: 0.35rem; white-space: pre-wrap; }
-    .actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.65rem; }
-    a.sheet-link {
-      color: var(--accent);
-      font-size: 0.85rem;
-      text-decoration: none;
+    .st-sub { font-size: 0.74rem; color: var(--muted); margin-top: 0.25rem; line-height: 1.35; }
+    .st-err { font-size: 0.72rem; color: var(--bad); margin-top: 0.2rem; max-width: 280px; }
+    h2.log-h {
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin: 0 0 0.5rem;
+      color: var(--muted);
     }
-    a.sheet-link:hover { text-decoration: underline; }
-    .toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+    .log-box {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--card);
+      max-height: 280px;
+      overflow-y: auto;
+      font-size: 0.78rem;
+    }
+    .log-row {
+      padding: 0.4rem 0.65rem;
+      border-bottom: 1px solid var(--border);
+      display: grid;
+      grid-template-columns: 9.5rem 1fr;
+      gap: 0.5rem;
+    }
+    .log-row:last-child { border-bottom: none; }
+    .log-time { color: var(--muted); font-family: ui-monospace, monospace; }
+    .log-msg { word-break: break-word; }
+    .log-msg.ok { color: var(--ok); }
+    .log-msg.bad { color: var(--bad); }
+    .hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.35rem; max-width: 52rem; line-height: 1.45; }
   </style>
 </head>
 <body>
   <header>
     <h1>Камеры</h1>
     <span class="meta" id="updated"></span>
+    <span class="meta" id="ping-hint"></span>
     <div class="toolbar">
       <button type="button" id="btn-refresh">Обновить таблицу</button>
-      <button type="button" class="secondary" id="btn-probe-all">Проверить все</button>
+      <button type="button" class="secondary" id="btn-ping-all">Ping всех</button>
       <a class="sheet-link" id="sheet-link" href="#" style="display:none;" target="_blank" rel="noopener">Открыть таблицу</a>
     </div>
   </header>
   <div id="alert" class="warn" style="display:none;"></div>
-  <div class="grid" id="grid"></div>
+  <p class="hint" id="mode-hint"></p>
+  <div class="wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Проект</th>
+          <th>Наименование</th>
+          <th>Тип камеры</th>
+          <th>Поток</th>
+          <th>Статус</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+  <h2 class="log-h">Журнал опросов (ping)</h2>
+  <div class="log-box" id="log-box"></div>
 
   <script>
-    const grid = document.getElementById("grid");
+    const tbody = document.getElementById("tbody");
     const alertEl = document.getElementById("alert");
     const updatedEl = document.getElementById("updated");
+    const pingHintEl = document.getElementById("ping-hint");
+    const modeHintEl = document.getElementById("mode-hint");
     const sheetLink = document.getElementById("sheet-link");
+    const logBox = document.getElementById("log-box");
     document.getElementById("btn-refresh").onclick = () => load(true);
-    document.getElementById("btn-probe-all").onclick = () => probeAll();
+    document.getElementById("btn-ping-all").onclick = () => pingAll();
+
+    function fmtTs(iso) {
+      if (!iso) return "—";
+      try {
+        return new Date(iso).toLocaleString("ru-RU", {
+          day: "2-digit", month: "2-digit", year: "numeric",
+          hour: "2-digit", minute: "2-digit", second: "2-digit",
+        });
+      } catch { return iso; }
+    }
 
     function badge(online) {
-      if (online === true) return '<span class="badge ok">В сети</span>';
-      if (online === false) return '<span class="badge bad">Нет связи</span>';
-      return '<span class="badge unk">Проверка…</span>';
+      if (online === true) return '<span class="badge ok">Online</span>';
+      if (online === false) return '<span class="badge bad">Offline</span>';
+      return '<span class="badge unk">Не проверено</span>';
     }
 
     function showAlert(msg) {
@@ -131,6 +202,26 @@
       if (typeof d === "string") return d;
       if (Array.isArray(d)) return d.map((x) => x.msg || JSON.stringify(x)).join("; ");
       return "";
+    }
+
+    function renderLogs(logs) {
+      logBox.innerHTML = "";
+      if (!logs || !logs.length) {
+        logBox.innerHTML = '<div class="log-row"><span class="log-time">—</span><span class="log-msg">Записей пока нет</span></div>';
+        return;
+      }
+      for (const e of logs) {
+        const row = document.createElement("div");
+        row.className = "log-row";
+        const okc = e.ok === true ? "ok" : e.ok === false ? "bad" : "";
+        const label = [e.project, e.name].filter(Boolean).join(" · ") || e.camera_id || "";
+        row.innerHTML =
+          '<span class="log-time">' + escapeHtml(fmtTs(e.at)) + '</span>' +
+          '<span class="log-msg ' + okc + '">' +
+          escapeHtml(label ? label + " — " : "") + escapeHtml(e.message || "") +
+          "</span>";
+        logBox.appendChild(row);
+      }
     }
 
     async function load(refreshSheets) {
@@ -165,54 +256,82 @@
         sheetLink.style.display = "none";
       }
       updatedEl.textContent = data.sheets_updated_at
-        ? "Данные таблицы: " + data.sheets_updated_at
+        ? "Данные: " + fmtTs(data.sheets_updated_at)
         : "";
-      grid.innerHTML = "";
+      const pmin = Math.round((data.ping_interval_sec || 1800) / 60);
+      pingHintEl.textContent = "Авто ping: раз в " + pmin + " мин";
+      if (data.table_mode) {
+        modeHintEl.textContent =
+          "Режим таблицы: лист «" + (data.cameras_sheet || "Камеры") +
+          "». Первая строка — заголовки (Проект, Наименование, Тип, URL с rtsp://). Дальше строки камер. " +
+          "Статус по ICMP ping: часть камер не отвечает на ping при рабочем RTSP — ориентируйтесь на ffplay.";
+      } else {
+        modeHintEl.textContent =
+          "Режим по вкладкам: на каждом листе ищется RTSP URL. Чтобы использовать колонки Проект / Камера / Тип, создайте лист «" +
+          (data.cameras_sheet || "Камеры") + "» с таблицей. Статус — по ping хоста из URL.";
+      }
+      tbody.innerHTML = "";
+      renderLogs(data.logs);
       if (!data.cameras.length) {
-        grid.innerHTML = "<p class=\"meta\">Нет камер. Добавьте лист в Google Таблицу и ячейку с <code>rtsp://...</code> (первые 200 строк, колонки A–Z).</p>";
+        tbody.innerHTML =
+          "<tr><td colspan=\"5\" class=\"mono\">Нет камер. " +
+          (data.table_mode
+            ? "Добавьте строки с заполненным RTSP в колонке URL."
+            : "Добавьте лист с ячейкой rtsp://… или лист «Камеры» с таблицей.") +
+          "</td></tr>";
         return;
       }
       for (const c of data.cameras) {
-        const card = document.createElement("div");
-        card.className = "card";
-        card.innerHTML = `
-          <h2>${escapeHtml(c.name)}</h2>
-          ${badge(c.online)}
-          <p class="url">${escapeHtml(c.rtsp_masked)}${c.cell ? " · " + escapeHtml(c.cell) : ""}</p>
-          ${c.last_error ? `<div class="err">${escapeHtml(c.last_error)}</div>` : ""}
-          <div class="actions">
-            <button type="button" data-probe="${c.sheet_id}">Проверить</button>
-            <button type="button" class="secondary" data-play="${c.sheet_id}">ffplay</button>
-          </div>
-        `;
-        grid.appendChild(card);
+        const tr = document.createElement("tr");
+        const hostLine = c.ping_host
+          ? "<div class=\"st-sub\">ping → " + escapeHtml(c.ping_host) + "</div>"
+          : "";
+        const errLine = c.last_error && c.online === false
+          ? "<div class=\"st-err\">" + escapeHtml(c.last_error) + "</div>"
+          : "";
+        tr.innerHTML =
+          "<td>" + escapeHtml(c.project || "—") + "</td>" +
+          "<td>" + escapeHtml(c.name || "—") + "</td>" +
+          "<td>" + escapeHtml(c.camera_type || "—") + "</td>" +
+          "<td class=\"mono\">" + escapeHtml(c.rtsp_masked || "") +
+          (c.cell ? " <span class=\"st-sub\">" + escapeHtml(c.cell) + "</span>" : "") +
+          "<div class=\"st-sub\"><button type=\"button\" class=\"secondary sm\" data-play=\"" +
+          escapeHtml(c.camera_id) + "\">Открыть RTSP (ffplay)</button>" +
+          " <button type=\"button\" class=\"sm\" data-ping=\"" + escapeHtml(c.camera_id) + "\">Ping</button></div></td>" +
+          "<td>" + badge(c.online) +
+          "<div class=\"st-sub\">Проверено: " + fmtTs(c.last_check_at) + "</div>" +
+          "<div class=\"st-sub\">В сети (ping OK): " + fmtTs(c.last_seen_online) + "</div>" +
+          hostLine + errLine + "</td>";
+        tbody.appendChild(tr);
       }
-      grid.querySelectorAll("[data-probe]").forEach((btn) => {
+      tbody.querySelectorAll("[data-play]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           btn.disabled = true;
-          await fetch("/api/cameras/" + btn.dataset.probe + "/probe", { method: "POST" });
+          const id = btn.getAttribute("data-play");
+          const r = await fetch("/api/cameras/" + encodeURIComponent(id) + "/ffplay", { method: "POST" });
+          btn.disabled = false;
+          if (!r.ok) {
+            const t = await r.json().catch(() => ({}));
+            alert(apiErrorText(t) || r.statusText);
+          } else await load(false);
+        });
+      });
+      tbody.querySelectorAll("[data-ping]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          const id = btn.getAttribute("data-ping");
+          await fetch("/api/cameras/" + encodeURIComponent(id) + "/ping", { method: "POST" });
           await load(false);
           btn.disabled = false;
         });
       });
-      grid.querySelectorAll("[data-play]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          btn.disabled = true;
-          const r = await fetch("/api/cameras/" + btn.dataset.play + "/ffplay", { method: "POST" });
-          btn.disabled = false;
-          if (!r.ok) {
-            const t = await r.json().catch(() => ({}));
-            alert(apiErrorText(t) || (typeof t.detail === "string" ? t.detail : "") || r.statusText);
-          }
-        });
-      });
     }
 
-    async function probeAll() {
-      const btn = document.getElementById("btn-probe-all");
+    async function pingAll() {
+      const btn = document.getElementById("btn-ping-all");
       btn.disabled = true;
       try {
-        const res = await fetch("/api/cameras/probe-all", { method: "POST" });
+        const res = await fetch("/api/cameras/ping-all", { method: "POST" });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           showAlert(apiErrorText(data) || res.statusText);
@@ -235,7 +354,7 @@
     }
 
     load(false);
-    setInterval(() => load(false), 15000);
+    setInterval(() => load(false), 20000);
   </script>
 </body>
 </html>
