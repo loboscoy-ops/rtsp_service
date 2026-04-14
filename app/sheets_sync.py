@@ -72,13 +72,24 @@ class SheetsState:
 
 
 def _build_sheets_client():
-    if not config.GOOGLE_APPLICATION_CREDENTIALS:
-        raise RuntimeError("Не задан GOOGLE_APPLICATION_CREDENTIALS в .env")
-    creds = service_account.Credentials.from_service_account_file(
-        config.GOOGLE_APPLICATION_CREDENTIALS,
-        scopes=SCOPES,
+    if config.GOOGLE_APPLICATION_CREDENTIALS:
+        creds = service_account.Credentials.from_service_account_file(
+            config.GOOGLE_APPLICATION_CREDENTIALS,
+            scopes=SCOPES,
+        )
+        return build("sheets", "v4", credentials=creds, cache_discovery=False)
+    if config.GOOGLE_SHEETS_API_KEY:
+        return build(
+            "sheets",
+            "v4",
+            developerKey=config.GOOGLE_SHEETS_API_KEY,
+            cache_discovery=False,
+        )
+    raise RuntimeError(
+        "Укажите в .env GOOGLE_APPLICATION_CREDENTIALS (JSON сервисного аккаунта) "
+        "или GOOGLE_SHEETS_API_KEY (ключ API; в Google Cloud включите Sheets API; "
+        "таблица — доступ «Просматривать могут все в интернете»)."
     )
-    return build("sheets", "v4", credentials=creds, cache_discovery=False)
 
 
 def _col_index_to_a1(idx: int) -> str:
@@ -349,14 +360,17 @@ def check_spreadsheet_access() -> dict:
         "sheets_count": 0,
         "camera_sheet": None,
         "read_sample_ok": False,
+        "auth_mode": config.SHEETS_AUTH_MODE,
         "error": None,
     }
 
     if not config.SPREADSHEET_ID:
-        out["error"] = "Не задан SPREADSHEET_ID в .env"
+        out["error"] = "Не задан SPREADSHEET_ID"
         return out
-    if not config.GOOGLE_APPLICATION_CREDENTIALS:
-        out["error"] = "Не задан GOOGLE_APPLICATION_CREDENTIALS в .env"
+    if config.SHEETS_AUTH_MODE == "none":
+        out["error"] = (
+            "Нет учётных данных: задайте GOOGLE_APPLICATION_CREDENTIALS или GOOGLE_SHEETS_API_KEY"
+        )
         return out
 
     try:

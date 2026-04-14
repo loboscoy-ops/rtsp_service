@@ -261,6 +261,7 @@ async def list_cameras():
         "cameras_sheet": config.CAMERAS_SHEET or None,
         "cameras_sheet_gid": config.CAMERAS_SHEET_GID,
         "cameras_sheet_title": table_sheet_title,
+        "sheets_auth_mode": config.SHEETS_AUTH_MODE,
         "ping_interval_sec": config.PING_INTERVAL_SEC,
         "cameras": [_camera_payload(c) for c in cams],
         "logs": _recent_logs(150),

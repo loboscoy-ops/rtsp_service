@@ -207,6 +207,8 @@
         if (d.ok) {
           setSheetsAccessClass("state-ok");
           let s = "Google Sheets: OK";
+          if (d.auth_mode === "api_key") s += " [API key]";
+          else if (d.auth_mode === "service_account") s += " [service account]";
           if (d.spreadsheet_title) s += " · «" + d.spreadsheet_title + "»";
           s += " · листов: " + (d.sheets_count ?? "—");
           if (d.camera_sheet) {

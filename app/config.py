@@ -7,8 +7,15 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "").strip()
+# Ваша книга по умолчанию (можно переопределить в .env)
+_DEFAULT_SPREADSHEET_ID = "1sYMmVZTjE136vruKJx1hh-gkwax_AtFWHrnO8x2xWkw"
+_DEFAULT_CAMERAS_SHEET_GID = 1450282054
+
+SPREADSHEET_ID = os.getenv("SPREADSHEET_ID", "").strip() or _DEFAULT_SPREADSHEET_ID
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+# Альтернатива JSON: ключ API Google Cloud (Sheets API включён). Таблица должна быть доступна
+# «Все в интернете могут просматривать» — иначе 403.
+GOOGLE_SHEETS_API_KEY = os.getenv("GOOGLE_SHEETS_API_KEY", "").strip()
 
 # Лист с таблицей камер (колонки проект / имя / тип / URL).
 # CAMERAS_SHEET_GID — число из URL (...#gid=1450282054); если задано, имеет приоритет над именем листа.
@@ -22,8 +29,18 @@ def _optional_int(name: str) -> int | None:
         return None
 
 
-CAMERAS_SHEET_GID = _optional_int("CAMERAS_SHEET_GID")
+if "CAMERAS_SHEET_GID" in os.environ:
+    CAMERAS_SHEET_GID = _optional_int("CAMERAS_SHEET_GID")
+else:
+    CAMERAS_SHEET_GID = _DEFAULT_CAMERAS_SHEET_GID
+
 CAMERAS_SHEET = os.getenv("CAMERAS_SHEET", "Камеры").strip()
+
+SHEETS_AUTH_MODE = (
+    "service_account"
+    if GOOGLE_APPLICATION_CREDENTIALS
+    else ("api_key" if GOOGLE_SHEETS_API_KEY else "none")
+)
 IGNORE_SHEETS = frozenset(
     s.strip()
     for s in os.getenv("IGNORE_SHEETS", "Template,Шаблон,README").split(",")
