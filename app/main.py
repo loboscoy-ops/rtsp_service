@@ -16,7 +16,12 @@ import subprocess
 from . import config
 from .host_ping import host_from_rtsp_url, ping_host
 from .rtsp_probe import mask_rtsp_url
-from .sheets_sync import CameraRecord, SheetsState, fetch_cameras_from_spreadsheet
+from .sheets_sync import (
+    CameraRecord,
+    SheetsState,
+    check_spreadsheet_access,
+    fetch_cameras_from_spreadsheet,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -226,6 +231,12 @@ def _camera_payload(c: CameraRecord) -> dict:
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "service": "rtsp-camera-service"}
+
+
+@app.get("/api/sheets-access")
+async def sheets_access():
+    """Проверка ключа и прав: метаданные книги + чтение A1 целевого листа."""
+    return await asyncio.to_thread(check_spreadsheet_access)
 
 
 @app.get("/api/logs")

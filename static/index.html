@@ -132,6 +132,10 @@
     .log-msg.ok { color: var(--ok); }
     .log-msg.bad { color: var(--bad); }
     .hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.35rem; max-width: 52rem; line-height: 1.45; }
+    #sheets-access { max-width: 40rem; line-height: 1.35; }
+    #sheets-access.state-ok { color: var(--ok); }
+    #sheets-access.state-bad { color: var(--bad); }
+    #sheets-access.state-wait { color: var(--muted); }
   </style>
 </head>
 <body>
@@ -142,8 +146,10 @@
     <div class="toolbar">
       <button type="button" id="btn-refresh">Обновить таблицу</button>
       <button type="button" class="secondary" id="btn-ping-all">Ping всех</button>
+      <button type="button" class="secondary sm" id="btn-sheets-access">Проверить доступ к Google</button>
       <a class="sheet-link" id="sheet-link" href="#" style="display:none;" target="_blank" rel="noopener">Открыть таблицу</a>
     </div>
+    <p class="meta" id="sheets-access" style="width:100%; margin:0.35rem 0 0;">Проверка доступа к Google Sheets…</p>
   </header>
   <div id="alert" class="warn" style="display:none;"></div>
   <p class="hint" id="mode-hint"></p>
@@ -172,8 +178,61 @@
     const modeHintEl = document.getElementById("mode-hint");
     const sheetLink = document.getElementById("sheet-link");
     const logBox = document.getElementById("log-box");
-    document.getElementById("btn-refresh").onclick = () => load(true);
+    const sheetsAccessEl = document.getElementById("sheets-access");
+    document.getElementById("btn-refresh").onclick = async () => {
+      await load(true);
+      checkSheetsAccess();
+    };
     document.getElementById("btn-ping-all").onclick = () => pingAll();
+    document.getElementById("btn-sheets-access").onclick = () => checkSheetsAccess();
+
+    function setSheetsAccessClass(state) {
+      sheetsAccessEl.classList.remove("state-ok", "state-bad", "state-wait");
+      sheetsAccessEl.classList.add(state);
+    }
+
+    async function checkSheetsAccess() {
+      const btn = document.getElementById("btn-sheets-access");
+      btn.disabled = true;
+      setSheetsAccessClass("state-wait");
+      sheetsAccessEl.textContent = "Проверка доступа к Google Sheets…";
+      try {
+        const res = await fetch("/api/sheets-access");
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setSheetsAccessClass("state-bad");
+          sheetsAccessEl.textContent = "Google Sheets: " + (apiErrorText(d) || res.statusText);
+          return;
+        }
+        if (d.ok) {
+          setSheetsAccessClass("state-ok");
+          let s = "Google Sheets: OK";
+          if (d.spreadsheet_title) s += " · «" + d.spreadsheet_title + "»";
+          s += " · листов: " + (d.sheets_count ?? "—");
+          if (d.camera_sheet) {
+            if (d.camera_sheet.mode === "table") {
+              s += " · камеры: «" + (d.camera_sheet.title || "") + "» (gid " + d.camera_sheet.gid + ")";
+            } else {
+              s += " · " + (d.camera_sheet.message || "legacy");
+              if (d.camera_sheet.sample_sheet_title) {
+                s += ", тест чтения: «" + d.camera_sheet.sample_sheet_title + "»";
+              }
+            }
+          }
+          s += d.read_sample_ok ? " · чтение A1: OK" : " · чтение A1: —";
+          s += " · " + fmtTs(d.checked_at);
+          sheetsAccessEl.textContent = s;
+        } else {
+          setSheetsAccessClass("state-bad");
+          sheetsAccessEl.textContent = "Google Sheets: нет доступа — " + (d.error || "неизвестная ошибка");
+        }
+      } catch (e) {
+        setSheetsAccessClass("state-bad");
+        sheetsAccessEl.textContent = "Google Sheets: сеть — " + (e && e.message ? e.message : e);
+      } finally {
+        btn.disabled = false;
+      }
+    }
 
     function fmtTs(iso) {
       if (!iso) return "—";
@@ -359,7 +418,9 @@
     }
 
     load(false);
+    checkSheetsAccess();
     setInterval(() => load(false), 20000);
+    setInterval(() => checkSheetsAccess(), 5 * 60 * 1000);
   </script>
 </body>
 </html>

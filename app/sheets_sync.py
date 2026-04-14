@@ -334,3 +334,121 @@ def fetch_cameras_from_spreadsheet() -> SheetsState:
         table_mode=False,
         table_sheet_title=None,
     )
+
+
+def check_spreadsheet_access() -> dict:
+    """Проверка: ключ, метаданные книги, наличие целевого листа, чтение ячейки A1."""
+    from datetime import datetime, timezone
+
+    ts = datetime.now(timezone.utc).isoformat()
+    out: dict = {
+        "ok": False,
+        "checked_at": ts,
+        "spreadsheet_id": config.SPREADSHEET_ID,
+        "spreadsheet_title": None,
+        "sheets_count": 0,
+        "camera_sheet": None,
+        "read_sample_ok": False,
+        "error": None,
+    }
+
+    if not config.SPREADSHEET_ID:
+        out["error"] = "Не задан SPREADSHEET_ID в .env"
+        return out
+    if not config.GOOGLE_APPLICATION_CREDENTIALS:
+        out["error"] = "Не задан GOOGLE_APPLICATION_CREDENTIALS в .env"
+        return out
+
+    try:
+        service = _build_sheets_client()
+        meta = (
+            service.spreadsheets()
+            .get(
+                spreadsheetId=config.SPREADSHEET_ID,
+                fields="properties.title,sheets(properties(sheetId,title))",
+            )
+            .execute()
+        )
+    except HttpError as e:
+        out["error"] = f"Google Sheets API {e.status_code}: {e.reason}"
+        return out
+    except Exception as e:
+        out["error"] = str(e)
+        log.exception("check_spreadsheet_access")
+        return out
+
+    out["spreadsheet_title"] = (meta.get("properties") or {}).get("title")
+    sheets = meta.get("sheets") or []
+    out["sheets_count"] = len(sheets)
+
+    titles_to_props: dict[str, dict] = {}
+    for sh in sheets:
+        props = (sh or {}).get("properties") or {}
+        title = (props.get("title") or "").strip()
+        if title:
+            titles_to_props[title] = props
+
+    table_props: dict | None = None
+    table_sheet_name = ""
+
+    if config.CAMERAS_SHEET_GID is not None:
+        want = int(config.CAMERAS_SHEET_GID)
+        for sh in sheets:
+            props = (sh or {}).get("properties") or {}
+            if int(props.get("sheetId", -1)) == want:
+                table_props = props
+                table_sheet_name = (props.get("title") or "").strip() or f"gid{want}"
+                break
+        if table_props is None:
+            out["error"] = f"Лист с gid={want} не найден в книге"
+            return out
+    else:
+        tname = (config.CAMERAS_SHEET or "").strip()
+        if tname and tname in titles_to_props:
+            table_props = titles_to_props[tname]
+            table_sheet_name = tname
+
+    if table_props is not None:
+        sid = int(table_props.get("sheetId", 0))
+        out["camera_sheet"] = {
+            "mode": "table",
+            "gid": sid,
+            "title": table_sheet_name,
+        }
+        sample_title = table_sheet_name
+    else:
+        first = None
+        for sh in sheets:
+            props = (sh or {}).get("properties") or {}
+            title = (props.get("title") or "").strip()
+            if title and title not in config.IGNORE_SHEETS:
+                first = title
+                break
+        out["camera_sheet"] = {
+            "mode": "legacy",
+            "message": "Камеры с вкладок с RTSP",
+            "sample_sheet_title": first,
+        }
+        sample_title = first
+
+    if not sample_title:
+        out["error"] = "Нет ни одного листа для проверки чтения (все в IGNORE_SHEETS?)"
+        return out
+
+    tab = _quote_sheet_tab(sample_title)
+    try:
+        service.spreadsheets().values().get(
+            spreadsheetId=config.SPREADSHEET_ID,
+            range=f"{tab}!A1:A1",
+            majorDimension="ROWS",
+        ).execute()
+        out["read_sample_ok"] = True
+    except HttpError as e:
+        out["error"] = f"Чтение A1 листа «{sample_title}»: {e.status_code} {e.reason}"
+        return out
+    except Exception as e:
+        out["error"] = f"Чтение A1: {e}"
+        return out
+
+    out["ok"] = True
+    return out
