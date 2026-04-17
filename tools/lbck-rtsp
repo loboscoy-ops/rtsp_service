@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# lbck-rtsp — обновляет проект из GitHub и запускает приложение.
+#
+# Использование:
+#   lbck-rtsp                # pull + запуск GUI
+#   lbck-rtsp --no-pull      # без обращения к GitHub
+#   lbck-rtsp --no-deps      # пропустить pip install -r requirements.txt
+#   lbck-rtsp --background   # запустить отдельным процессом (отвязка от терминала)
+#   lbck-rtsp --update-only  # только обновить, без запуска
+#   lbck-rtsp -- <args>      # всё после `--` пробрасывается в python -m app.main
+#
+# Поведение:
+#   1. Делает git fetch + pull --ff-only origin main
+#   2. Создаёт venv (.venv) при отсутствии, ставит зависимости
+#   3. Запускает `python -m app.main` из венва
+
+set -euo pipefail
+
+REPO_DIR="${RTSP_PROJECT_DIR:-/Users/aleksandr/rtsp-camera-service}"
+VENV_DIR="$REPO_DIR/.venv"
+PY="$VENV_DIR/bin/python"
+PIP="$VENV_DIR/bin/pip"
+BRANCH="${RTSP_BRANCH:-main}"
+
+DO_PULL=1
+DO_DEPS=1
+RUN_BG=0
+UPDATE_ONLY=0
+EXTRA_ARGS=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-pull) DO_PULL=0; shift ;;
+    --no-deps) DO_DEPS=0; shift ;;
+    --background|--bg) RUN_BG=1; shift ;;
+    --update-only) UPDATE_ONLY=1; shift ;;
+    -h|--help)
+      sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    --) shift; EXTRA_ARGS=("$@"); break ;;
+    *) EXTRA_ARGS+=("$1"); shift ;;
+  esac
+done
+
+if [ ! -d "$REPO_DIR" ]; then
+  echo "lbck-rtsp: каталог проекта не найден: $REPO_DIR" >&2
+  echo "Задайте RTSP_PROJECT_DIR=/path/to/repo" >&2
+  exit 1
+fi
+
+cd "$REPO_DIR"
+
+if [ "$DO_PULL" = "1" ]; then
+  if [ ! -d .git ]; then
+    echo "lbck-rtsp: $REPO_DIR не git-репозиторий, пропускаю pull"
+  else
+    echo "[lbck-rtsp] git fetch + merge --ff-only origin/$BRANCH"
+    git fetch --tags --prune origin "$BRANCH"
+    git merge --ff-only "origin/$BRANCH"
+  fi
+fi
+
+if [ ! -x "$PY" ]; then
+  echo "[lbck-rtsp] создаю venv: $VENV_DIR"
+  PYTHON_BIN="${RTSP_PYTHON:-python3}"
+  "$PYTHON_BIN" -m venv "$VENV_DIR"
+  "$PIP" install --upgrade pip >/dev/null
+  DO_DEPS=1
+fi
+
+if [ "$DO_DEPS" = "1" ] && [ -f requirements.txt ]; then
+  echo "[lbck-rtsp] pip install -r requirements.txt (тихо)"
+  "$PIP" install -q -r requirements.txt
+fi
+
+if [ "$UPDATE_ONLY" = "1" ]; then
+  echo "[lbck-rtsp] обновление выполнено, запуск пропущен"
+  exit 0
+fi
+
+echo "[lbck-rtsp] запуск приложения"
+if [ "$RUN_BG" = "1" ]; then
+  LOG_FILE="${RTSP_LOG_FILE:-/tmp/rtsp_app.log}"
+  nohup "$PY" -m app.main ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} >"$LOG_FILE" 2>&1 &
+  disown || true
+  echo "[lbck-rtsp] PID=$! лог: $LOG_FILE"
+else
+  exec "$PY" -m app.main ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
+fi
