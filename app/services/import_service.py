@@ -294,7 +294,7 @@ class ImportService:
         # Распространяем значения из объединённых ячеек: если object_name пуст,
         # подставляем последнее непустое значение из той же колонки выше.
         last_object_name = ""
-        seen_keys: dict[tuple[str, str], int] = {}
+        seen_urls: dict[str, int] = {}
 
         for r_idx in range(header_row_index + 1, len(sheet.rows)):
             row = sheet.rows[r_idx]
@@ -332,17 +332,14 @@ class ImportService:
             if not camera_identifier:
                 err_parts.append("camera_identifier пустой")
 
-            key = (object_name.lower(), camera_identifier.lower())
-            if object_name and camera_identifier and key in seen_keys:
-                # Не помечаем как ошибку — последний upsert перепишет первый.
-                preview.issues.append(
-                    PreviewIssue(
-                        row_no,
-                        f"строка {row_no}: повтор object_name + camera_identifier "
-                        f"(перезапишет строку {seen_keys[key]})",
+            url_key = rtsp_url.strip().lower()
+            if url_key:
+                if url_key in seen_urls:
+                    err_parts.append(
+                        f"дубликат RTSP (см. строку {seen_urls[url_key]})"
                     )
-                )
-            seen_keys[key] = row_no
+                else:
+                    seen_urls[url_key] = row_no
 
             err = "; ".join(err_parts)
             preview.rows.append(

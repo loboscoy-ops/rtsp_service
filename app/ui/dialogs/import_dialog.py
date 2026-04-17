@@ -350,25 +350,19 @@ class ImportDialog(QDialog):
             )
             return
 
-        unique_keys = {
-            (r.object_name.lower(), r.camera_identifier.lower())
-            for r in self.preview.valid_rows
-        }
+        unique_urls = {r.rtsp_url.strip().lower() for r in self.preview.valid_rows if r.rtsp_url}
         total = len(self.preview.valid_rows)
-        if len(unique_keys) < total:
+        if 0 < len(unique_urls) < total:
             resp = QMessageBox.warning(
                 self,
                 "Импорт",
                 (
-                    f"В превью {total} строк, но уникальных ID камер только {len(unique_keys)}.\n"
-                    "Каждая повторная строка ПЕРЕЗАПИШЕТ предыдущую.\n\n"
-                    "Скорее всего, в качестве «ID камеры (camera_identifier)» выбрана колонка, "
-                    "повторяющаяся между камерами (например, «Описание зоны обзора» или «УИН»).\n"
-                    "Поменяйте её на колонку с уникальным значением (например «№ п/п»).\n\n"
+                    f"В превью {total} строк, но уникальных RTSP-ссылок только {len(unique_urls)}.\n"
+                    "В файле есть повторяющиеся RTSP. Дубликаты будут пропущены.\n\n"
                     "Всё равно импортировать?"
                 ),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
             )
             if resp != QMessageBox.StandardButton.Yes:
                 return
