@@ -71,7 +71,7 @@ class ImportDialog(QDialog):
 
     def __init__(self, import_service: ImportService, template_service: TemplateService, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Импорт XLSX")
+        self.setWindowTitle("Импорт формы")
         self.resize(1100, 720)
         self.import_service = import_service
         self.template_service = template_service
@@ -92,13 +92,14 @@ class ImportDialog(QDialog):
         self._set_busy(False)
 
     def _build_ui(self) -> None:
-        choose_btn = QPushButton("Выбрать XLSX")
+        choose_btn = QPushButton("Выбрать файл (.xlsx / .xls)")
         choose_btn.clicked.connect(self.choose_file)
         template_btn = QPushButton("Скачать шаблон XLSX")
         template_btn.clicked.connect(self.download_template)
         preview_btn = QPushButton("Предпросмотр")
         preview_btn.clicked.connect(self.build_preview)
-        import_btn = QPushButton("Импортировать")
+        import_btn = QPushButton("Импорт формы")
+        import_btn.setToolTip("Применить выбранную форму в БД")
         import_btn.clicked.connect(self.run_import)
         self.import_btn = import_btn
 
@@ -168,9 +169,9 @@ class ImportDialog(QDialog):
     def choose_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Выберите Excel",
+            "Выберите Excel-файл",
             "",
-            "Excel (*.xlsx *.XLSX *.xls *.XLS)",
+            "Excel files (*.xlsx *.XLSX *.xls *.XLS);;Все файлы (*)",
         )
         if not path:
             return
@@ -251,6 +252,20 @@ class ImportDialog(QDialog):
             if target is not None and 0 <= target < max_cols:
                 combo.setCurrentIndex(target + 1)
             combo.blockSignals(False)
+            try:
+                combo.currentIndexChanged.disconnect(self._schedule_auto_preview)
+            except (RuntimeError, TypeError):
+                pass
+            combo.currentIndexChanged.connect(self._schedule_auto_preview)
+        self._schedule_auto_preview()
+
+    def _schedule_auto_preview(self) -> None:
+        if not self.current_sheet:
+            return
+        mapping = self._current_mapping()
+        if any(mapping.get(f) is None for f in REQUIRED_FIELDS):
+            return
+        self.build_preview()
 
     @staticmethod
     def _col_letter(idx: int) -> str:
@@ -315,11 +330,23 @@ class ImportDialog(QDialog):
         self._summary_cache = self.summary_label.text()
 
     def run_import(self) -> None:
+        if not self.current_sheet:
+            QMessageBox.warning(self, "Импорт", "Сначала выберите файл и лист")
+            return
         if not self.preview:
-            QMessageBox.warning(self, "Импорт", "Сначала выполните предпросмотр")
+            self.build_preview()
+            QMessageBox.information(
+                self,
+                "Импорт",
+                "Подготовлен предпросмотр. Нажмите ещё раз «Импорт формы», чтобы загрузить.",
+            )
             return
         if not self.preview.valid_rows:
-            QMessageBox.warning(self, "Импорт", "Нет валидных строк для импорта")
+            QMessageBox.warning(
+                self,
+                "Импорт",
+                "Нет валидных строк для импорта. Проверьте сопоставление колонок и текст ошибок в таблице.",
+            )
             return
         preview = self.preview
         self._set_busy(True)

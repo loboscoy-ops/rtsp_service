@@ -125,16 +125,24 @@ class ImportService:
             pass
         return str(value).strip()
 
+    @staticmethod
+    def _engine_for(path: Path) -> str:
+        suffix = path.suffix.lower()
+        if suffix == ".xls":
+            return "xlrd"
+        return "openpyxl"
+
     def list_sheets(self, path: Path) -> list[SheetData]:
         sheets: list[SheetData] = []
-        with pd.ExcelFile(path, engine="openpyxl") as xls:
+        engine = self._engine_for(path)
+        with pd.ExcelFile(path, engine=engine) as xls:
             for name in xls.sheet_names:
                 df = pd.read_excel(
                     xls,
                     sheet_name=name,
                     header=None,
                     dtype=str,
-                    engine="openpyxl",
+                    engine=engine,
                 )
                 rows = [
                     [self._clean_cell(c) for c in row]

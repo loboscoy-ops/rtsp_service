@@ -100,7 +100,8 @@ class MainWindow(QMainWindow):
         self.add_camera_btn = add_camera_btn
         toolbar.addWidget(add_camera_btn)
 
-        import_btn = QPushButton("Импорт XLSX")
+        import_btn = QPushButton("Импорт формы")
+        import_btn.setToolTip("Загрузить .xls / .xlsx и сопоставить колонки")
         import_btn.clicked.connect(self._open_import_dialog)
         self.import_btn = import_btn
         toolbar.addWidget(import_btn)
