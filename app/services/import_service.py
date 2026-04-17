@@ -25,12 +25,14 @@ FIELD_HINTS: dict[str, tuple[str, ...]] = {
     ),
     "camera_identifier": (
         "camera_identifier",
-        "уин",
-        "uin",
-        "id",
-        "идентификатор",
         "№ п/п",
         "номер",
+        "id камеры",
+        "идентификатор камеры",
+        "идентификатор",
+        "id",
+        "уин",
+        "uin",
     ),
     "camera_name": (
         "camera_name",
