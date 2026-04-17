@@ -96,41 +96,44 @@ class CameraCheckWorker(QRunnable):
         ]
         try:
             proc = run_command(cmd, timeout_sec=max(2, config.CHECK_TIMEOUT_SEC + 2))
-            if proc.returncode == 0 and proc.stdout.strip():
-                result = CheckResult(
+        except subprocess.TimeoutExpired:
+            return
+        except Exception as exc:
+            self._emit(
+                CheckResult(
+                    camera_id=self.camera.id,
+                    status="offline",
+                    checked_at=checked_at,
+                    error=str(exc),
+                    seen_online_at=last_seen,
+                )
+            )
+            return
+
+        if proc.returncode == 0 and proc.stdout.strip():
+            self._emit(
+                CheckResult(
                     camera_id=self.camera.id,
                     status="online",
                     checked_at=checked_at,
                     error=None,
                     seen_online_at=checked_at,
                 )
-            else:
-                err = (proc.stderr or proc.stdout or f"Код {proc.returncode}").strip()
-                result = CheckResult(
-                    camera_id=self.camera.id,
-                    status="offline",
-                    checked_at=checked_at,
-                    error=err[:500],
-                    seen_online_at=last_seen,
-                )
-        except subprocess.TimeoutExpired:
-            result = CheckResult(
-                camera_id=self.camera.id,
-                status="offline",
-                checked_at=checked_at,
-                error="Таймаут проверки потока",
-                seen_online_at=last_seen,
             )
-        except Exception as exc:
-            result = CheckResult(
-                camera_id=self.camera.id,
-                status="offline",
-                checked_at=checked_at,
-                error=str(exc),
-                seen_online_at=last_seen,
-            )
+            return
 
-        self._emit(result)
+        err = (proc.stderr or proc.stdout or f"Код {proc.returncode}").strip()
+        if "timed out" in err.lower() or "timeout" in err.lower():
+            return
+        self._emit(
+            CheckResult(
+                camera_id=self.camera.id,
+                status="offline",
+                checked_at=checked_at,
+                error=err[:500],
+                seen_online_at=last_seen,
+            )
+        )
 
 
 class CameraChecker(QObject):

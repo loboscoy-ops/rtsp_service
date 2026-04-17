@@ -27,6 +27,7 @@ class CameraTable(QTableWidget):
     edit_requested = Signal(int)
     delete_requested = Signal(int)
     coordinates_copied = Signal(str)
+    sort_changed = Signal(int, Qt.SortOrder)
 
     COLUMNS = [
         "Объект",
@@ -60,8 +61,31 @@ class CameraTable(QTableWidget):
         header = self.horizontalHeader()
         header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         header.customContextMenuRequested.connect(self._show_header_menu)
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        header.sectionClicked.connect(self._on_section_clicked)
+        self._sort_column = self.COL_OBJECT
+        self._sort_order = Qt.SortOrder.AscendingOrder
 
         self._restore_visibility()
+
+    def _on_section_clicked(self, column: int) -> None:
+        if column == self.COL_ACTIONS:
+            return
+        if column == self._sort_column:
+            self._sort_order = (
+                Qt.SortOrder.DescendingOrder
+                if self._sort_order == Qt.SortOrder.AscendingOrder
+                else Qt.SortOrder.AscendingOrder
+            )
+        else:
+            self._sort_column = column
+            self._sort_order = Qt.SortOrder.AscendingOrder
+        self.horizontalHeader().setSortIndicator(self._sort_column, self._sort_order)
+        self.sort_changed.emit(self._sort_column, self._sort_order)
+
+    def current_sort(self) -> tuple[int, Qt.SortOrder]:
+        return self._sort_column, self._sort_order
 
     # --- selection / keys ---------------------------------------------
 
@@ -190,7 +214,7 @@ class CameraTable(QTableWidget):
             act = QAction(label, menu)
             act.setCheckable(True)
             act.setChecked(not self.isColumnHidden(idx))
-            act.triggered.connect(partial(self._toggle_column, idx))
+            act.toggled.connect(lambda checked, i=idx: self._toggle_column(i, checked))
             menu.addAction(act)
         menu.addSeparator()
         reset_act = QAction("Показать все", menu)
@@ -198,8 +222,8 @@ class CameraTable(QTableWidget):
         menu.addAction(reset_act)
         menu.exec(self.horizontalHeader().mapToGlobal(pos))
 
-    def _toggle_column(self, idx: int, checked: bool) -> None:
-        self.setColumnHidden(idx, not checked)
+    def _toggle_column(self, idx: int, visible: bool) -> None:
+        self.setColumnHidden(idx, not visible)
         self._save_visibility()
 
     def _show_all_columns(self) -> None:

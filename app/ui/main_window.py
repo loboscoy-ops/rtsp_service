@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
+
+import shutil
+import subprocess
 from PySide6.QtWidgets import (
     QComboBox,
     QLabel,
@@ -43,6 +46,8 @@ class MainWindow(QMainWindow):
         self.current_object_id: int | None = None
         self.objects_cache: list[ObjectModel] = []
         self.cameras_cache: list[CameraModel] = []
+        self._sort_column = 0
+        self._sort_order = Qt.SortOrder.AscendingOrder
 
         self.setWindowTitle(f"{config.APP_NAME} {config.APP_VERSION}")
         self.resize(1450, 880)
@@ -160,6 +165,7 @@ class MainWindow(QMainWindow):
         self.table.edit_requested.connect(self._edit_camera)
         self.table.delete_requested.connect(self._delete_camera)
         self.table.coordinates_copied.connect(self._on_coords_copied)
+        self.table.sort_changed.connect(self._on_sort_changed)
         self.checker.camera_checked.connect(self._on_camera_checked)
 
     def _log(self, message: str) -> None:
@@ -184,8 +190,45 @@ class MainWindow(QMainWindow):
             search=search,
             status_filter=status_filter,
         )
+        cameras = self._apply_sort(cameras)
         self.cameras_cache = cameras
         self.table.populate(cameras)
+
+    def _apply_sort(self, cameras: list[CameraModel]) -> list[CameraModel]:
+        col = self._sort_column
+        order = self._sort_order
+        T = self.table
+        status_rank = {"online": 0, "offline": 1, "unknown": 2}
+
+        def key(cam: CameraModel):
+            if col == T.COL_OBJECT:
+                return (cam.object_name or "").lower()
+            if col == T.COL_ID:
+                return (cam.camera_identifier or "").lower()
+            if col == T.COL_NAME:
+                return (cam.camera_name or "").lower()
+            if col == T.COL_TYPE:
+                return (cam.group_name or "").lower()
+            if col == T.COL_GPS:
+                return (cam.gps_coords or "").lower()
+            if col == T.COL_STATUS:
+                return status_rank.get(cam.status, 9)
+            if col == T.COL_SEEN:
+                return cam.last_seen_online_at or ""
+            if col == T.COL_CHECKED:
+                return cam.last_checked_at or ""
+            if col == T.COL_ERR:
+                return cam.last_error or ""
+            if col == T.COL_RTSP:
+                return (cam.rtsp_url or "").lower()
+            return cam.camera_name or ""
+
+        return sorted(cameras, key=key, reverse=(order == Qt.SortOrder.DescendingOrder))
+
+    def _on_sort_changed(self, column: int, order: Qt.SortOrder) -> None:
+        self._sort_column = column
+        self._sort_order = order
+        self._refresh_cameras()
 
     def _on_object_selected(self, object_id: int) -> None:
         self.current_object_id = object_id
@@ -296,10 +339,30 @@ class MainWindow(QMainWindow):
         if not cam:
             return
         result = self.ffplay.launch(cam.rtsp_url, f"{cam.object_name} / {cam.camera_name}")
-        if result.ok:
-            self._log(f"Открыт поток: {cam.camera_name}")
-        else:
+        if not result.ok:
             QMessageBox.warning(self, "FFplay", result.error or "Не удалось открыть поток")
+            return
+        self._log(f"Открыт поток: {cam.camera_name}")
+        self.lower()
+        self.clearFocus()
+        QTimer.singleShot(300, self._activate_ffplay_window)
+
+    def _activate_ffplay_window(self) -> None:
+        osa = shutil.which("osascript")
+        if not osa:
+            return
+        try:
+            subprocess.Popen(
+                [
+                    osa,
+                    "-e",
+                    'tell application "System Events" to set frontmost of (first process whose name is "ffplay") to true',
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
 
     def _check_single_camera(self, camera_id: int) -> None:
         cam = self.repo.get_camera(camera_id)
