@@ -240,6 +240,9 @@ class ImportDialog(QDialog):
             labels.append(label)
 
         auto = self.import_service.auto_detect_mapping(header)
+        auto = self.import_service.refine_identifier_mapping(
+            self.current_sheet, header_idx, auto
+        )
 
         for field, combo in self._mapping_combos.items():
             combo.blockSignals(True)
@@ -346,6 +349,30 @@ class ImportDialog(QDialog):
                 "Нет валидных строк для импорта. Проверьте сопоставление колонок и текст ошибок в таблице.",
             )
             return
+
+        unique_keys = {
+            (r.object_name.lower(), r.camera_identifier.lower())
+            for r in self.preview.valid_rows
+        }
+        total = len(self.preview.valid_rows)
+        if len(unique_keys) < total:
+            resp = QMessageBox.warning(
+                self,
+                "Импорт",
+                (
+                    f"В превью {total} строк, но уникальных ID камер только {len(unique_keys)}.\n"
+                    "Каждая повторная строка ПЕРЕЗАПИШЕТ предыдущую.\n\n"
+                    "Скорее всего, в качестве «ID камеры (camera_identifier)» выбрана колонка, "
+                    "повторяющаяся между камерами (например, «Описание зоны обзора» или «УИН»).\n"
+                    "Поменяйте её на колонку с уникальным значением (например «№ п/п»).\n\n"
+                    "Всё равно импортировать?"
+                ),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if resp != QMessageBox.StandardButton.Yes:
+                return
+
         preview = self.preview
         self._set_busy(True)
 

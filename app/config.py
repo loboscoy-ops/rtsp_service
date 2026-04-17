@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 APP_NAME = "RTSP Camera Monitor"
-APP_VERSION = "0.1.8"
+APP_VERSION = "0.1.9"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 IS_FROZEN = bool(getattr(sys, "frozen", False))

@@ -155,6 +155,75 @@ class ImportService:
                 sheets.append(SheetData(name=name, rows=rows))
         return sheets
 
+    def refine_identifier_mapping(
+        self,
+        sheet: SheetData,
+        header_row_index: int,
+        mapping: dict[str, int | None],
+    ) -> dict[str, int | None]:
+        """Если в выбранной колонке camera_identifier данные плохо уникальны,
+        попробовать другие подходящие колонки и выбрать ту, что даёт больше
+        уникальных значений в строках, где есть валидный rtsp_url."""
+        url_col = mapping.get("rtsp_url")
+        if url_col is None:
+            return mapping
+        # отбираем строки, в которых rtsp валиден
+        data_rows: list[list[str]] = []
+        for r_idx in range(header_row_index + 1, len(sheet.rows)):
+            row = sheet.rows[r_idx]
+            if url_col >= len(row):
+                continue
+            if is_valid_rtsp_url(row[url_col]):
+                data_rows.append(row)
+        if not data_rows:
+            return mapping
+
+        candidate_cols = sorted(
+            {c for c in (mapping.get("camera_identifier"), *self._identifier_candidate_cols(sheet, header_row_index)) if c is not None}
+        )
+        used = {v for k, v in mapping.items() if v is not None and k != "camera_identifier"}
+        best_col = mapping.get("camera_identifier")
+        best_unique = self._count_unique(data_rows, best_col) if best_col is not None else 0
+        for col in candidate_cols:
+            if col in used:
+                continue
+            unique = self._count_unique(data_rows, col)
+            if unique > best_unique:
+                best_unique = unique
+                best_col = col
+        if best_col is not None and best_col != mapping.get("camera_identifier"):
+            mapping = dict(mapping)
+            mapping["camera_identifier"] = best_col
+        return mapping
+
+    @staticmethod
+    def _count_unique(rows: list[list[str]], col: int) -> int:
+        if col is None:
+            return 0
+        seen: set[str] = set()
+        for row in rows:
+            if col >= len(row):
+                continue
+            v = row[col].strip()
+            if v:
+                seen.add(v.lower())
+        return len(seen)
+
+    def _identifier_candidate_cols(self, sheet: SheetData, header_row_index: int) -> list[int]:
+        """Колонки, претендующие на роль ID: содержат числа или подходящие подписи."""
+        if header_row_index >= len(sheet.rows):
+            return []
+        header = sheet.rows[header_row_index]
+        hints = {_norm(h) for h in FIELD_HINTS["camera_identifier"]}
+        cols: list[int] = []
+        for idx, h in enumerate(header):
+            n = _norm(h)
+            if not n:
+                continue
+            if any(hint in n for hint in hints):
+                cols.append(idx)
+        return cols
+
     def detect_header_row(self, rows: list[list[str]]) -> int:
         """Подбирает строку заголовков, в которой максимум совпадений с FIELD_HINTS."""
         best_idx = 0
