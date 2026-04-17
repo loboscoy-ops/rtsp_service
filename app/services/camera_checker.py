@@ -97,6 +97,17 @@ class CameraCheckWorker(QRunnable):
         try:
             proc = run_command(cmd, timeout_sec=max(2, config.CHECK_TIMEOUT_SEC + 2))
         except subprocess.TimeoutExpired:
+            # Тайм-аут: НЕ помечаем offline и не пишем ошибку, но фиксируем,
+            # что проверка прошла, чтобы UI не выглядел "никогда не проверена".
+            self._emit(
+                CheckResult(
+                    camera_id=self.camera.id,
+                    status=self.camera.status or "unknown",
+                    checked_at=checked_at,
+                    error=None,
+                    seen_online_at=last_seen,
+                )
+            )
             return
         except Exception as exc:
             self._emit(
@@ -124,6 +135,16 @@ class CameraCheckWorker(QRunnable):
 
         err = (proc.stderr or proc.stdout or f"Код {proc.returncode}").strip()
         if "timed out" in err.lower() or "timeout" in err.lower():
+            # ffprobe сам сообщил тайм-аут — статус не меняем, но last_checked_at обновим.
+            self._emit(
+                CheckResult(
+                    camera_id=self.camera.id,
+                    status=self.camera.status or "unknown",
+                    checked_at=checked_at,
+                    error=None,
+                    seen_online_at=last_seen,
+                )
+            )
             return
         self._emit(
             CheckResult(
