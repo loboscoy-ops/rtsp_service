@@ -10,8 +10,8 @@ from app.database.repository import Repository
 from app.utils.validators import is_valid_rtsp_url, parse_enabled
 
 
-REQUIRED_FIELDS = ("object_name", "camera_identifier", "camera_name", "rtsp_url")
-OPTIONAL_FIELDS = ("group_name", "gps_coords", "enabled")
+REQUIRED_FIELDS = ("object_name", "camera_identifier", "rtsp_url")
+OPTIONAL_FIELDS = ("camera_name", "group_name", "gps_coords", "enabled")
 ALL_FIELDS = REQUIRED_FIELDS + OPTIONAL_FIELDS
 
 # Подсказки для авто-подбора колонок (точные совпадения и частичные).
@@ -222,7 +222,11 @@ class ImportService:
         if preview.issues:
             return preview
 
-        seen_keys: set[tuple[str, str]] = set()
+        # Распространяем значения из объединённых ячеек: если object_name пуст,
+        # подставляем последнее непустое значение из той же колонки выше.
+        last_object_name = ""
+        seen_keys: dict[tuple[str, str], int] = {}
+
         for r_idx in range(header_row_index + 1, len(sheet.rows)):
             row = sheet.rows[r_idx]
             row_no = r_idx + 1
@@ -233,33 +237,43 @@ class ImportService:
                     return ""
                 return row[col]
 
-            object_name = _val("object_name")
+            rtsp_url = _val("rtsp_url")
+            # Тихо пропускаем строки без RTSP — это служебные/нумерационные/пустые строки.
+            if not is_valid_rtsp_url(rtsp_url):
+                continue
+
+            object_name = _val("object_name") or last_object_name
+            if _val("object_name"):
+                last_object_name = _val("object_name")
             camera_identifier = _val("camera_identifier")
             camera_name = _val("camera_name")
-            rtsp_url = _val("rtsp_url")
             group_name = _val("group_name")
             gps_coords = _val("gps_coords")
             enabled_raw = _val("enabled")
             enabled = parse_enabled(enabled_raw) if enabled_raw else True
 
-            if not any([object_name, camera_identifier, camera_name, rtsp_url, group_name, gps_coords]):
-                continue
+            if not camera_name:
+                camera_name = (
+                    f"Камера {camera_identifier}" if camera_identifier else f"Строка {row_no}"
+                )
 
             err_parts: list[str] = []
             if not object_name:
                 err_parts.append("object_name пустой")
             if not camera_identifier:
                 err_parts.append("camera_identifier пустой")
-            if not camera_name:
-                err_parts.append("camera_name пустой")
-            if not is_valid_rtsp_url(rtsp_url):
-                err_parts.append("rtsp_url некорректный")
+
             key = (object_name.lower(), camera_identifier.lower())
-            if object_name and camera_identifier:
-                if key in seen_keys:
-                    err_parts.append("дубликат object_name + camera_identifier")
-                else:
-                    seen_keys.add(key)
+            if object_name and camera_identifier and key in seen_keys:
+                # Не помечаем как ошибку — последний upsert перепишет первый.
+                preview.issues.append(
+                    PreviewIssue(
+                        row_no,
+                        f"строка {row_no}: повтор object_name + camera_identifier "
+                        f"(перезапишет строку {seen_keys[key]})",
+                    )
+                )
+            seen_keys[key] = row_no
 
             err = "; ".join(err_parts)
             preview.rows.append(

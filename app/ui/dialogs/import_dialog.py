@@ -31,8 +31,8 @@ from app.services.template_service import TemplateService
 FIELD_LABELS = {
     "object_name": "Объект (object_name) *",
     "camera_identifier": "ID камеры (camera_identifier) *",
-    "camera_name": "Имя камеры (camera_name) *",
     "rtsp_url": "RTSP URL (rtsp_url) *",
+    "camera_name": "Имя камеры (camera_name)",
     "group_name": "Группа / тип (group_name)",
     "gps_coords": "GPS координаты (gps_coords)",
     "enabled": "Активна (enabled)",
@@ -323,15 +323,7 @@ class ImportDialog(QDialog):
             self.table.setItem(idx, 6, QTableWidgetItem(row.error))
         valid_count = len(preview.valid_rows)
         total = len(preview.rows)
-        text = f"Строк данных: {total}. Валидных: {valid_count}. Ошибок: {len(preview.issues)}."
-        dup_count = sum(1 for r in preview.rows if "дубликат" in r.error)
-        if dup_count >= 3:
-            text += (
-                "  ⚠ Много дубликатов по object_name + camera_identifier. "
-                "Похоже, в качестве «ID камеры» выбрана колонка, общая для нескольких камер "
-                "(например, УИН объекта). Поменяйте «ID камеры (camera_identifier)» на колонку с "
-                "уникальным значением, например «№ п/п»."
-            )
+        text = f"Строк данных: {total}. Валидных: {valid_count}. Заметок: {len(preview.issues)}."
         self.summary_label.setText(text)
         self._summary_cache = self.summary_label.text()
 
