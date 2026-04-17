@@ -407,7 +407,15 @@ class MainWindow(QMainWindow):
         self._refresh_cameras()
 
     def _open_import_dialog(self) -> None:
-        dlg = ImportDialog(self.import_service, self.template_service, self)
+        import traceback
+
+        try:
+            dlg = ImportDialog(self.import_service, self.template_service, self)
+        except Exception as exc:
+            tb = traceback.format_exc()
+            self._log(f"Ошибка открытия импорта: {exc}")
+            QMessageBox.critical(self, "Импорт", f"Не удалось открыть окно импорта:\n{exc}\n\n{tb}")
+            return
         dlg.import_completed.connect(self._on_import_completed)
         dlg.exec()
 

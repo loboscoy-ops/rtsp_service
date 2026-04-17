@@ -33,7 +33,8 @@ FIELD_LABELS = {
     "camera_identifier": "ID камеры (camera_identifier) *",
     "camera_name": "Имя камеры (camera_name) *",
     "rtsp_url": "RTSP URL (rtsp_url) *",
-    "group_name": "Группа (group_name)",
+    "group_name": "Группа / тип (group_name)",
+    "gps_coords": "GPS координаты (gps_coords)",
     "enabled": "Активна (enabled)",
 }
 NOT_USED_LABEL = "(не использовать)"
