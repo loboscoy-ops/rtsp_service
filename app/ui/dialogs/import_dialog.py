@@ -114,6 +114,7 @@ class ImportDialog(QDialog):
         self.file_label = QLabel("Файл не выбран")
 
         self.sheet_combo = QComboBox()
+        self.sheet_combo.setMinimumWidth(360)
         self.sheet_combo.currentIndexChanged.connect(self._on_sheet_changed)
 
         self.header_spin = QSpinBox()
@@ -213,13 +214,10 @@ class ImportDialog(QDialog):
         if not self.current_sheet:
             return
         max_header = max(1, len(self.current_sheet.rows))
+        detected_idx = self.import_service.detect_header_row(self.current_sheet.rows)
         self.header_spin.blockSignals(True)
         self.header_spin.setMaximum(max_header)
-        first_non_empty = next(
-            (i + 1 for i, r in enumerate(self.current_sheet.rows) if any(c for c in r)),
-            1,
-        )
-        self.header_spin.setValue(min(first_non_empty, max_header))
+        self.header_spin.setValue(min(detected_idx + 1, max_header))
         self.header_spin.blockSignals(False)
         self._refresh_mapping_combos()
 

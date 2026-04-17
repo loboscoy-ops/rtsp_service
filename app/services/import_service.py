@@ -153,6 +153,23 @@ class ImportService:
                 sheets.append(SheetData(name=name, rows=rows))
         return sheets
 
+    def detect_header_row(self, rows: list[list[str]]) -> int:
+        """Подбирает строку заголовков, в которой максимум совпадений с FIELD_HINTS."""
+        best_idx = 0
+        best_score = -1
+        best_nonempty = -1
+        limit = min(len(rows), 30)
+        for idx in range(limit):
+            row = rows[idx]
+            mapping = self.auto_detect_mapping(row)
+            score = sum(1 for v in mapping.values() if v is not None)
+            non_empty = sum(1 for c in row if c)
+            if score > best_score or (score == best_score and non_empty > best_nonempty):
+                best_score = score
+                best_nonempty = non_empty
+                best_idx = idx
+        return best_idx
+
     def auto_detect_mapping(self, header_row: list[str]) -> dict[str, int | None]:
         normalized = [_norm(c) for c in header_row]
         used: set[int] = set()
