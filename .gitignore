@@ -8,3 +8,7 @@ venv/
 .idea/
 .vscode/
 *.log
+data/*.db
+data/*.sqlite
+data/*.xlsx
+resources/*.xlsx
