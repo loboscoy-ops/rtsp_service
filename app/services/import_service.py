@@ -155,13 +155,28 @@ class ImportService:
 
     def auto_detect_mapping(self, header_row: list[str]) -> dict[str, int | None]:
         normalized = [_norm(c) for c in header_row]
+        used: set[int] = set()
         mapping: dict[str, int | None] = {f: None for f in ALL_FIELDS}
+        # 1. exact match first
         for field_name, hints in FIELD_HINTS.items():
+            wanted = {_norm(h) for h in hints}
             for idx, h in enumerate(normalized):
-                if not h:
+                if not h or idx in used:
                     continue
-                if any(h == _norm(hint) or _norm(hint) in h for hint in hints):
+                if h in wanted:
                     mapping[field_name] = idx
+                    used.add(idx)
+                    break
+        # 2. fuzzy substring fallback for fields not yet mapped
+        for field_name, hints in FIELD_HINTS.items():
+            if mapping[field_name] is not None:
+                continue
+            for idx, h in enumerate(normalized):
+                if not h or idx in used:
+                    continue
+                if any(_norm(hint) in h for hint in hints):
+                    mapping[field_name] = idx
+                    used.add(idx)
                     break
         return mapping
 
