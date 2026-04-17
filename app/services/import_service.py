@@ -241,6 +241,26 @@ class ImportService:
                 best_idx = idx
         return best_idx
 
+    def build_synthetic_headers(
+        self, sheet: SheetData, header_row_index: int
+    ) -> list[str]:
+        """Объединяет подписи из header_row и всех строк выше — для случаев,
+        когда заголовки разнесены по нескольким объединённым строкам."""
+        if not sheet.rows or header_row_index < 0:
+            return []
+        max_cols = max((len(r) for r in sheet.rows), default=0)
+        out: list[str] = []
+        for col in range(max_cols):
+            parts: list[str] = []
+            for r in range(0, min(header_row_index + 1, len(sheet.rows))):
+                row = sheet.rows[r]
+                if col < len(row):
+                    v = " ".join(row[col].split())
+                    if v and v not in parts:
+                        parts.append(v)
+            out.append(" / ".join(parts))
+        return out
+
     def auto_detect_mapping(self, header_row: list[str]) -> dict[str, int | None]:
         normalized = [_norm(c) for c in header_row]
         used: set[int] = set()

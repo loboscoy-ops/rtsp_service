@@ -230,16 +230,16 @@ class ImportDialog(QDialog):
         header_idx = self.header_spin.value() - 1
         if header_idx < 0 or header_idx >= len(self.current_sheet.rows):
             return
-        header = self.current_sheet.rows[header_idx]
-        max_cols = max((len(r) for r in self.current_sheet.rows), default=len(header))
+        synthetic = self.import_service.build_synthetic_headers(self.current_sheet, header_idx)
+        max_cols = len(synthetic)
         labels: list[str] = []
         for col in range(max_cols):
-            head = header[col] if col < len(header) else ""
+            head = synthetic[col]
             letter = self._col_letter(col)
             label = f"{letter} · {head}" if head else f"{letter} · (пусто)"
             labels.append(label)
 
-        auto = self.import_service.auto_detect_mapping(header)
+        auto = self.import_service.auto_detect_mapping(synthetic)
         auto = self.import_service.refine_identifier_mapping(
             self.current_sheet, header_idx, auto
         )
