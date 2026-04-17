@@ -26,6 +26,7 @@ class CameraTable(QTableWidget):
     check_requested = Signal(int)
     edit_requested = Signal(int)
     delete_requested = Signal(int)
+    coordinates_copied = Signal(str)
 
     COLUMNS = [
         "Объект",
@@ -84,7 +85,32 @@ class CameraTable(QTableWidget):
                 self.delete_requested.emit(cam_id)
                 event.accept()
                 return
+        if (
+            event.key() == Qt.Key.Key_C
+            and event.modifiers() & Qt.KeyboardModifier.ControlModifier
+        ):
+            if self._copy_selected_gps():
+                event.accept()
+                return
         super().keyPressEvent(event)
+
+    def _selected_gps(self) -> str:
+        row = self.currentRow()
+        if row < 0 or row >= self.rowCount():
+            return ""
+        item = self.item(row, self.COL_GPS)
+        if not item:
+            return ""
+        text = item.data(Qt.ItemDataRole.UserRole) or item.text()
+        return str(text or "").strip()
+
+    def _copy_selected_gps(self) -> bool:
+        text = self._selected_gps()
+        if not text:
+            return False
+        QGuiApplication.clipboard().setText(text)
+        self.coordinates_copied.emit(text)
+        return True
 
     # --- populate ------------------------------------------------------
 

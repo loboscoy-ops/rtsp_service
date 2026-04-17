@@ -159,6 +159,7 @@ class MainWindow(QMainWindow):
         self.table.check_requested.connect(self._check_single_camera)
         self.table.edit_requested.connect(self._edit_camera)
         self.table.delete_requested.connect(self._delete_camera)
+        self.table.coordinates_copied.connect(self._on_coords_copied)
         self.checker.camera_checked.connect(self._on_camera_checked)
 
     def _log(self, message: str) -> None:
@@ -318,6 +319,9 @@ class MainWindow(QMainWindow):
         enabled = [c for c in cameras if c.enabled]
         self.checker.check_many(enabled)
         self._log(f"Автопроверка: {len(enabled)} камер")
+
+    def _on_coords_copied(self, coords: str) -> None:
+        self._log(f"Координаты скопированы: {coords}")
 
     def _on_camera_checked(self, result: CheckResult) -> None:
         self.repo.update_camera_status(
