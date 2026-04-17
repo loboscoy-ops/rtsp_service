@@ -378,6 +378,26 @@ class ImportService:
             if err_parts:
                 preview.issues.append(PreviewIssue(row_no, err))
 
+        # Если внутри объекта несколько строк имеют одинаковый camera_identifier,
+        # но разные RTSP (это разные камеры), добавляем суффикс '-2', '-3', ...
+        seen_pairs: dict[tuple[str, str], int] = {}
+        for row in preview.rows:
+            if not row.camera_identifier:
+                continue
+            key = (row.object_name.lower(), row.camera_identifier.lower())
+            count = seen_pairs.get(key, 0) + 1
+            seen_pairs[key] = count
+            if count > 1:
+                suffixed = f"{row.camera_identifier}-{count}"
+                preview.issues.append(
+                    PreviewIssue(
+                        0,
+                        f"В объекте «{row.object_name}» уже был camera_identifier "
+                        f"'{row.camera_identifier}' — переименовано в '{suffixed}'.",
+                    )
+                )
+                row.camera_identifier = suffixed
+
         return preview
 
     def import_valid_rows(self, preview: ImportPreview) -> tuple[int, int]:
