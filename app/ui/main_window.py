@@ -416,6 +416,15 @@ class MainWindow(QMainWindow):
         self._refresh_cameras()
         self._log(f"Импорт завершен. Создано={created}, обновлено={updated}")
 
+    def closeEvent(self, event) -> None:
+        try:
+            killed = self.ffplay.terminate_all()
+            if killed:
+                self._log(f"Закрыто окон ffplay: {killed}")
+        except Exception as exc:
+            self._log(f"Не удалось закрыть ffplay: {exc}")
+        super().closeEvent(event)
+
     def _git_pull_from_github(self) -> None:
         from app.services.git_service import GitPullService
 

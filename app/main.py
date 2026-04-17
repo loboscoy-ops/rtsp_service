@@ -30,6 +30,7 @@ def run() -> int:
     app.setApplicationVersion(config.APP_VERSION)
 
     window = MainWindow(repo)
+    app.aboutToQuit.connect(lambda: window.ffplay.terminate_all())
     window.show()
     return app.exec()
 
