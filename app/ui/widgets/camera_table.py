@@ -30,7 +30,9 @@ class CameraTable(QTableWidget):
     sort_changed = Signal(int, Qt.SortOrder)
 
     COLUMNS = [
+        "№",
         "Объект",
+        "УИН",
         "ID камеры",
         "Имя камеры",
         "Тип",
@@ -41,11 +43,12 @@ class CameraTable(QTableWidget):
         "RTSP",
         "Действия",
     ]
-    COL_OBJECT, COL_ID, COL_NAME, COL_TYPE, COL_GPS = 0, 1, 2, 3, 4
-    COL_STATUS, COL_CHECKED, COL_ERR = 5, 6, 7
-    COL_RTSP, COL_ACTIONS = 8, 9
-    COL_SEEN = -1  # колонка скрыта; данные не показываются в таблице
-    SETTINGS_HIDDEN_KEY = "camera_table/hidden_columns_v2"
+    COL_NUM, COL_OBJECT, COL_UIN, COL_ID, COL_NAME = 0, 1, 2, 3, 4
+    COL_TYPE, COL_GPS = 5, 6
+    COL_STATUS, COL_CHECKED, COL_ERR = 7, 8, 9
+    COL_RTSP, COL_ACTIONS = 10, 11
+    COL_SEEN = -1
+    SETTINGS_HIDDEN_KEY = "camera_table/hidden_columns_v3"
 
     def __init__(self):
         super().__init__(0, len(self.COLUMNS))
@@ -93,14 +96,17 @@ class CameraTable(QTableWidget):
         row = self.currentRow()
         if row < 0 or row >= self.rowCount():
             return None
-        item = self.item(row, self.COL_ID)
-        if not item:
-            return None
-        data = item.data(Qt.ItemDataRole.UserRole)
-        try:
-            return int(data) if data is not None else None
-        except (TypeError, ValueError):
-            return None
+        for col in (self.COL_NUM, self.COL_ID, self.COL_OBJECT):
+            item = self.item(row, col)
+            if not item:
+                continue
+            data = item.data(Qt.ItemDataRole.UserRole)
+            try:
+                if data is not None:
+                    return int(data)
+            except (TypeError, ValueError):
+                continue
+        return None
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
@@ -145,9 +151,16 @@ class CameraTable(QTableWidget):
         self.resizeColumnsToContents()
 
     def _set_row(self, row: int, cam: CameraModel) -> None:
+        num_item = QTableWidgetItem(str(row + 1))
+        num_item.setData(Qt.ItemDataRole.UserRole, cam.id)
+        num_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setItem(row, self.COL_NUM, num_item)
+
         obj_item = QTableWidgetItem(cam.object_name)
         obj_item.setData(Qt.ItemDataRole.UserRole, cam.id)
         self.setItem(row, self.COL_OBJECT, obj_item)
+
+        self.setItem(row, self.COL_UIN, QTableWidgetItem(cam.uin or ""))
 
         id_item = QTableWidgetItem(cam.camera_identifier)
         id_item.setData(Qt.ItemDataRole.UserRole, cam.id)

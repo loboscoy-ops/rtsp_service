@@ -71,6 +71,7 @@ class Repository:
     def _camera_from_row(self, row) -> CameraModel:
         keys = row.keys() if hasattr(row, "keys") else []
         gps = row["gps_coords"] if "gps_coords" in keys else ""
+        uin = row["uin"] if "uin" in keys else ""
         return CameraModel(
             id=row["id"],
             object_id=row["object_id"],
@@ -79,6 +80,7 @@ class Repository:
             camera_name=row["camera_name"],
             group_name=row["group_name"],
             gps_coords=gps or "",
+            uin=uin or "",
             rtsp_url=row["rtsp_url"],
             enabled=bool(row["enabled"]),
             status=row["status"],
@@ -145,17 +147,18 @@ class Repository:
         rtsp_url: str,
         enabled: bool,
         gps_coords: str = "",
+        uin: str = "",
     ) -> int:
         ts = now_iso()
         with get_connection() as conn:
             cur = conn.execute(
                 """
                 INSERT INTO cameras(
-                  object_id, camera_identifier, camera_name, group_name, gps_coords, rtsp_url,
+                  object_id, camera_identifier, camera_name, group_name, gps_coords, uin, rtsp_url,
                   enabled, status, last_seen_online_at, last_checked_at, last_error,
                   created_at, updated_at
                 )
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     object_id,
@@ -163,6 +166,7 @@ class Repository:
                     camera_name.strip(),
                     group_name.strip(),
                     gps_coords.strip(),
+                    uin.strip(),
                     rtsp_url.strip(),
                     int(enabled),
                     "unknown",
@@ -186,6 +190,7 @@ class Repository:
         rtsp_url: str,
         enabled: bool,
         gps_coords: str = "",
+        uin: str = "",
     ) -> None:
         ts = now_iso()
         with get_connection() as conn:
@@ -193,7 +198,7 @@ class Repository:
                 """
                 UPDATE cameras
                 SET object_id = ?, camera_identifier = ?, camera_name = ?, group_name = ?,
-                    gps_coords = ?, rtsp_url = ?, enabled = ?, updated_at = ?
+                    gps_coords = ?, uin = ?, rtsp_url = ?, enabled = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -202,6 +207,7 @@ class Repository:
                     camera_name.strip(),
                     group_name.strip(),
                     gps_coords.strip(),
+                    uin.strip(),
                     rtsp_url.strip(),
                     int(enabled),
                     ts,
@@ -226,6 +232,7 @@ class Repository:
         rtsp_url: str,
         enabled: bool,
         gps_coords: str = "",
+        uin: str = "",
     ) -> tuple[int, str]:
         object_id = self.get_or_create_object(object_name)
         ts = now_iso()
@@ -238,7 +245,7 @@ class Repository:
                 conn.execute(
                     """
                     UPDATE cameras
-                    SET camera_name = ?, group_name = ?, gps_coords = ?, rtsp_url = ?,
+                    SET camera_name = ?, group_name = ?, gps_coords = ?, uin = ?, rtsp_url = ?,
                         enabled = ?, updated_at = ?
                     WHERE id = ?
                     """,
@@ -246,6 +253,7 @@ class Repository:
                         camera_name.strip(),
                         group_name.strip(),
                         gps_coords.strip(),
+                        uin.strip(),
                         rtsp_url.strip(),
                         int(enabled),
                         ts,
@@ -258,10 +266,10 @@ class Repository:
             cur = conn.execute(
                 """
                 INSERT INTO cameras(
-                  object_id, camera_identifier, camera_name, group_name, gps_coords, rtsp_url, enabled,
+                  object_id, camera_identifier, camera_name, group_name, gps_coords, uin, rtsp_url, enabled,
                   status, last_seen_online_at, last_checked_at, last_error, created_at, updated_at
                 )
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     object_id,
@@ -269,6 +277,7 @@ class Repository:
                     camera_name.strip(),
                     group_name.strip(),
                     gps_coords.strip(),
+                    uin.strip(),
                     rtsp_url.strip(),
                     int(enabled),
                     "unknown",

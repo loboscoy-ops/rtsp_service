@@ -202,8 +202,12 @@ class MainWindow(QMainWindow):
         status_rank = {"online": 0, "offline": 1, "unknown": 2}
 
         def key(cam: CameraModel):
+            if col == T.COL_NUM:
+                return cam.id
             if col == T.COL_OBJECT:
                 return (cam.object_name or "").lower()
+            if col == T.COL_UIN:
+                return (cam.uin or "").lower()
             if col == T.COL_ID:
                 return (cam.camera_identifier or "").lower()
             if col == T.COL_NAME:
@@ -264,6 +268,7 @@ class MainWindow(QMainWindow):
                     camera_name=d.camera_name,
                     group_name=d.group_name,
                     gps_coords=d.gps_coords,
+                    uin=d.uin,
                     rtsp_url=d.rtsp_url,
                     enabled=d.enabled,
                 )
@@ -289,6 +294,7 @@ class MainWindow(QMainWindow):
                     camera_name=d.camera_name,
                     group_name=d.group_name,
                     gps_coords=d.gps_coords,
+                    uin=d.uin,
                     rtsp_url=d.rtsp_url,
                     enabled=d.enabled,
                 )

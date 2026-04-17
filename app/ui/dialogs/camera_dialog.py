@@ -24,6 +24,7 @@ class CameraFormData:
     camera_name: str
     group_name: str
     gps_coords: str
+    uin: str
     rtsp_url: str
     enabled: bool
 
@@ -49,6 +50,8 @@ class CameraDialog(QDialog):
         self.group_edit = QLineEdit(camera.group_name if camera else "")
         self.gps_edit = QLineEdit(camera.gps_coords if camera else "")
         self.gps_edit.setPlaceholderText("например: 55.7522, 37.6156")
+        self.uin_edit = QLineEdit(camera.uin if camera else "")
+        self.uin_edit.setPlaceholderText("УИН объекта (опционально)")
         self.rtsp_edit = QLineEdit(camera.rtsp_url if camera else "")
         self.enabled_check = QCheckBox("Камера активна")
         self.enabled_check.setChecked(camera.enabled if camera else True)
@@ -65,6 +68,7 @@ class CameraDialog(QDialog):
         form.addRow("Имя камеры", self.name_edit)
         form.addRow("Группа/зона", self.group_edit)
         form.addRow("GPS координаты", self.gps_edit)
+        form.addRow("УИН", self.uin_edit)
         form.addRow("RTSP URL", self.rtsp_edit)
         form.addRow("", self.enabled_check)
 
@@ -97,6 +101,7 @@ class CameraDialog(QDialog):
             camera_name=self.name_edit.text().strip(),
             group_name=self.group_edit.text().strip(),
             gps_coords=self.gps_edit.text().strip(),
+            uin=self.uin_edit.text().strip(),
             rtsp_url=self.rtsp_edit.text().strip(),
             enabled=self.enabled_check.isChecked(),
         )

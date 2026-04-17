@@ -23,6 +23,7 @@ class CameraModel:
     camera_name: str
     group_name: str
     gps_coords: str
+    uin: str
     rtsp_url: str
     enabled: bool
     status: str

@@ -11,7 +11,7 @@ from app.utils.validators import is_valid_rtsp_url, parse_enabled
 
 
 REQUIRED_FIELDS = ("object_name", "camera_identifier", "rtsp_url")
-OPTIONAL_FIELDS = ("camera_name", "group_name", "gps_coords", "enabled")
+OPTIONAL_FIELDS = ("camera_name", "group_name", "gps_coords", "uin", "enabled")
 ALL_FIELDS = REQUIRED_FIELDS + OPTIONAL_FIELDS
 
 # Подсказки для авто-подбора колонок (точные совпадения и частичные).
@@ -31,8 +31,6 @@ FIELD_HINTS: dict[str, tuple[str, ...]] = {
         "идентификатор камеры",
         "идентификатор",
         "id",
-        "уин",
-        "uin",
     ),
     "camera_name": (
         "camera_name",
@@ -64,6 +62,11 @@ FIELD_HINTS: dict[str, tuple[str, ...]] = {
         "координаты",
         "координата",
     ),
+    "uin": (
+        "uin",
+        "уин",
+        "код объекта",
+    ),
     "enabled": (
         "enabled",
         "активна",
@@ -87,6 +90,7 @@ class PreviewRow:
     rtsp_url: str
     group_name: str
     gps_coords: str
+    uin: str
     enabled: bool
     valid: bool
     error: str = ""
@@ -338,6 +342,7 @@ class ImportService:
             camera_name = _val("camera_name")
             group_name = _val("group_name")
             gps_coords = _val("gps_coords")
+            uin = _val("uin")
             enabled_raw = _val("enabled")
             enabled = parse_enabled(enabled_raw) if enabled_raw else True
 
@@ -370,6 +375,7 @@ class ImportService:
                     rtsp_url=rtsp_url,
                     group_name=group_name,
                     gps_coords=gps_coords,
+                    uin=uin,
                     enabled=enabled,
                     valid=not err_parts,
                     error=err,
@@ -412,6 +418,7 @@ class ImportService:
                 rtsp_url=row.rtsp_url,
                 enabled=row.enabled,
                 gps_coords=row.gps_coords,
+                uin=row.uin,
             )
             if action == "created":
                 created += 1

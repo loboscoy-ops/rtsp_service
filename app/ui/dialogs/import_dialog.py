@@ -35,6 +35,7 @@ FIELD_LABELS = {
     "camera_name": "Имя камеры (camera_name)",
     "group_name": "Группа / тип (group_name)",
     "gps_coords": "GPS координаты (gps_coords)",
+    "uin": "УИН (uin)",
     "enabled": "Активна (enabled)",
 }
 NOT_USED_LABEL = "(не использовать)"

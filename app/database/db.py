@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS cameras (
   camera_name TEXT NOT NULL,
   group_name TEXT NOT NULL DEFAULT '',
   gps_coords TEXT NOT NULL DEFAULT '',
+  uin TEXT NOT NULL DEFAULT '',
   rtsp_url TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1,
   status TEXT NOT NULL DEFAULT 'unknown',
@@ -42,6 +43,8 @@ def _ensure_columns(conn) -> None:
     cols = {row["name"] for row in conn.execute("PRAGMA table_info(cameras)").fetchall()}
     if "gps_coords" not in cols:
         conn.execute("ALTER TABLE cameras ADD COLUMN gps_coords TEXT NOT NULL DEFAULT ''")
+    if "uin" not in cols:
+        conn.execute("ALTER TABLE cameras ADD COLUMN uin TEXT NOT NULL DEFAULT ''")
     # Однократная миграция: распарсить старые group_name вида "Тип 2 | GPS 55.7, 37.6"
     rows = conn.execute(
         "SELECT id, group_name, gps_coords FROM cameras WHERE gps_coords = '' AND group_name LIKE '%GPS%'"

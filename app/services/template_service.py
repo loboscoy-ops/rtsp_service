@@ -17,6 +17,7 @@ class TemplateService:
                 "rtsp_url": "rtsp://user:pass@192.168.1.10:554/stream1",
                 "group_name": "КПП",
                 "gps_coords": "55.7522, 37.6156",
+                "uin": "IH0000-00-0000-001",
                 "enabled": 1,
             },
             {
@@ -26,6 +27,7 @@ class TemplateService:
                 "rtsp_url": "rtsp://user:pass@192.168.1.11:554/stream1",
                 "group_name": "Двор",
                 "gps_coords": "55.7530, 37.6160",
+                "uin": "IH0000-00-0000-001",
                 "enabled": 1,
             },
         ]
