@@ -214,8 +214,6 @@ class MainWindow(QMainWindow):
                 return (cam.gps_coords or "").lower()
             if col == T.COL_STATUS:
                 return status_rank.get(cam.status, 9)
-            if col == T.COL_SEEN:
-                return cam.last_seen_online_at or ""
             if col == T.COL_CHECKED:
                 return cam.last_checked_at or ""
             if col == T.COL_ERR:

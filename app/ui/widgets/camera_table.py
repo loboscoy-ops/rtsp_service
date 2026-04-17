@@ -36,16 +36,16 @@ class CameraTable(QTableWidget):
         "Тип",
         "Координаты",
         "Статус",
-        "Последний online",
         "Последняя проверка",
         "Ошибка",
         "RTSP",
         "Действия",
     ]
     COL_OBJECT, COL_ID, COL_NAME, COL_TYPE, COL_GPS = 0, 1, 2, 3, 4
-    COL_STATUS, COL_SEEN, COL_CHECKED, COL_ERR = 5, 6, 7, 8
-    COL_RTSP, COL_ACTIONS = 9, 10
-    SETTINGS_HIDDEN_KEY = "camera_table/hidden_columns"
+    COL_STATUS, COL_CHECKED, COL_ERR = 5, 6, 7
+    COL_RTSP, COL_ACTIONS = 8, 9
+    COL_SEEN = -1  # колонка скрыта; данные не показываются в таблице
+    SETTINGS_HIDDEN_KEY = "camera_table/hidden_columns_v2"
 
     def __init__(self):
         super().__init__(0, len(self.COLUMNS))
@@ -164,8 +164,12 @@ class CameraTable(QTableWidget):
             gps_item.setData(Qt.ItemDataRole.UserRole, cam.gps_coords)
         self.setItem(row, self.COL_GPS, gps_item)
 
-        self.setItem(row, self.COL_STATUS, status_item(cam.status))
-        self.setItem(row, self.COL_SEEN, QTableWidgetItem(iso_to_human(cam.last_seen_online_at)))
+        status_cell = status_item(cam.status)
+        if cam.last_seen_online_at:
+            status_cell.setToolTip(
+                f"Последний online: {iso_to_human(cam.last_seen_online_at)}"
+            )
+        self.setItem(row, self.COL_STATUS, status_cell)
         self.setItem(row, self.COL_CHECKED, QTableWidgetItem(iso_to_human(cam.last_checked_at)))
         self.setItem(row, self.COL_ERR, QTableWidgetItem(cam.last_error or ""))
         self.setItem(row, self.COL_RTSP, QTableWidgetItem(mask_rtsp_url(cam.rtsp_url)))
