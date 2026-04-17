@@ -23,28 +23,42 @@ class _PullJob(QRunnable):
 
 
 def _do_pull() -> tuple[bool, str]:
-    git_bin = shutil.which("git")
-    if not git_bin:
+    git_bin = shutil.which("git") or "/usr/bin/git"
+    if not (git_bin and shutil.which(git_bin) or shutil.which("git")):
         return False, "git не найден в PATH. Установите Xcode Command Line Tools."
 
-    git_dir = config.ROOT_DIR / ".git"
-    if not git_dir.exists():
-        return False, f"Директория {config.ROOT_DIR} не является git-репозиторием."
+    project_dir = config.PROJECT_GIT_DIR
+    if project_dir is None:
+        return False, (
+            "Не найден git-репозиторий проекта.\n"
+            f"Сделайте: git clone {config.GITHUB_REPO_URL} ~/rtsp-camera-service\n"
+            "или задайте RTSP_PROJECT_DIR в окружении."
+        )
 
     try:
+        subprocess.run(
+            [git_bin, "-C", str(project_dir), "fetch", "--prune", "origin", "main"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
+        )
         proc = subprocess.run(
-            [git_bin, "-C", str(config.ROOT_DIR), "pull", "--ff-only", "origin", "main"],
+            [git_bin, "-C", str(project_dir), "merge", "--ff-only", "origin/main"],
             capture_output=True,
             text=True,
             timeout=60,
         )
     except subprocess.TimeoutExpired:
-        return False, "git pull: таймаут"
+        return False, "git: таймаут"
+    except subprocess.CalledProcessError as exc:
+        return False, f"git fetch упал: {exc.stderr or exc.stdout or exc}"
     except Exception as exc:
-        return False, f"git pull: {exc}"
+        return False, f"git: {exc}"
 
     output = (proc.stdout or "") + (("\n" + proc.stderr) if proc.stderr else "")
-    return (proc.returncode == 0), output.strip() or f"код {proc.returncode}"
+    output = f"{project_dir}\n{output}".strip()
+    return (proc.returncode == 0), output or f"код {proc.returncode}"
 
 
 class GitPullService(QObject):

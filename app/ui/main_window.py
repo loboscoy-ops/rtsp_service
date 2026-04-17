@@ -355,11 +355,24 @@ class MainWindow(QMainWindow):
     def _git_pull_from_github(self) -> None:
         from app.services.git_service import GitPullService
 
+        if config.PROJECT_GIT_DIR is None:
+            QMessageBox.information(
+                self,
+                "GitHub",
+                (
+                    "Не найден git-репозиторий проекта на этом Mac.\n\n"
+                    "Чтобы кнопка обновляла код, выполните в терминале один раз:\n\n"
+                    f"  git clone {config.GITHUB_REPO_URL} ~/rtsp-camera-service\n\n"
+                    "После этого кнопка будет делать `git pull` в этом каталоге."
+                ),
+            )
+            return
+
         if not hasattr(self, "_git_service"):
             self._git_service = GitPullService(self)
             self._git_service.finished.connect(self._on_git_pull_done)
         self.git_btn.setEnabled(False)
-        self._log("git pull --ff-only origin main ...")
+        self._log(f"git pull в {config.PROJECT_GIT_DIR}...")
         self._git_service.start()
 
     def _on_git_pull_done(self, ok: bool, message: str) -> None:

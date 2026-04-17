@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 
@@ -8,12 +9,43 @@ APP_NAME = "RTSP Camera Monitor"
 APP_VERSION = "0.1.0"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = ROOT_DIR / "data"
+IS_FROZEN = bool(getattr(sys, "frozen", False))
+
+
+def _user_data_dir() -> Path:
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "RTSPCameraMonitor"
+    return Path.home() / ".rtsp-camera-monitor"
+
+
+# Куда пишем БД и логи: внутри репозитория при разработке, в Application Support при сборке.
+DATA_DIR = Path(os.getenv("RTSP_DATA_DIR") or (_user_data_dir() if IS_FROZEN else ROOT_DIR / "data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-DB_PATH = Path(os.getenv("RTSP_APP_DB_PATH", DATA_DIR / "rtsp_monitor.db"))
+DB_PATH = Path(os.getenv("RTSP_APP_DB_PATH") or (DATA_DIR / "rtsp_monitor.db"))
 LOG_DIR = DATA_DIR / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _find_project_git_dir() -> Path | None:
+    """Где брать .git для кнопки 'Обновить из GitHub'."""
+    candidates = []
+    env_dir = os.getenv("RTSP_PROJECT_DIR", "").strip()
+    if env_dir:
+        candidates.append(Path(env_dir).expanduser())
+    candidates.append(Path.home() / "rtsp-camera-service")
+    candidates.append(ROOT_DIR)
+    for c in candidates:
+        if (c / ".git").exists():
+            return c
+    return None
+
+
+PROJECT_GIT_DIR = _find_project_git_dir()
+GITHUB_REPO_URL = os.getenv(
+    "RTSP_GITHUB_URL",
+    "https://github.com/loboscoy-ops/rtsp_service",
+)
 
 # Excel source for MVP workflow.
 EXCEL_TEMPLATE_HEADERS = [
