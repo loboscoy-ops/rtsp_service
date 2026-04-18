@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
 
 import shutil
 import subprocess
@@ -158,6 +158,20 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(splitter)
 
         self.setStatusBar(QStatusBar())
+        self._setup_logo()
+
+    def _setup_logo(self) -> None:
+        if not config.LOGO_PATH.exists():
+            return
+        pix = QPixmap(str(config.LOGO_PATH))
+        if pix.isNull():
+            return
+        pix = pix.scaledToHeight(28, Qt.TransformationMode.SmoothTransformation)
+        self.logo_label = QLabel()
+        self.logo_label.setPixmap(pix)
+        self.logo_label.setToolTip("УРУС")
+        self.logo_label.setContentsMargins(8, 0, 8, 0)
+        self.statusBar().addPermanentWidget(self.logo_label)
 
     def _bind_signals(self) -> None:
         self.sidebar.object_selected.connect(self._on_object_selected)

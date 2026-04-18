@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 APP_NAME = "RTSP Camera Monitor"
-APP_VERSION = "0.1.18"
+APP_VERSION = "0.1.19"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 IS_FROZEN = bool(getattr(sys, "frozen", False))
@@ -46,6 +46,9 @@ GITHUB_REPO_URL = os.getenv(
     "RTSP_GITHUB_URL",
     "https://github.com/loboscoy-ops/rtsp_service",
 )
+
+RESOURCES_DIR = ROOT_DIR / "resources"
+LOGO_PATH = RESOURCES_DIR / "logo_urus.png"
 
 # Excel source for MVP workflow.
 EXCEL_TEMPLATE_HEADERS = [
