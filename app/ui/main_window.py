@@ -145,11 +145,35 @@ class MainWindow(QMainWindow):
         self.table = CameraTable()
         right_layout.addWidget(self.table)
 
-        right_layout.addWidget(QLabel("Лог"))
+        log_splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        log_left = QWidget()
+        log_left_layout = QVBoxLayout(log_left)
+        log_left_layout.setContentsMargins(0, 0, 0, 0)
+        log_left_layout.addWidget(QLabel("Лог"))
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(160)
-        right_layout.addWidget(self.log_text)
+        log_left_layout.addWidget(self.log_text)
+
+        log_right = QWidget()
+        log_right_layout = QVBoxLayout(log_right)
+        log_right_layout.setContentsMargins(0, 0, 0, 0)
+        log_right_layout.addWidget(QLabel("Ошибки (с временем)"))
+        self.error_text = QTextEdit()
+        self.error_text.setReadOnly(True)
+        self.error_text.setStyleSheet(
+            "QTextEdit { background-color: #2a1414; color: #ff8b8b; }"
+        )
+        log_right_layout.addWidget(self.error_text)
+
+        log_splitter.addWidget(log_left)
+        log_splitter.addWidget(log_right)
+        log_splitter.setStretchFactor(0, 1)
+        log_splitter.setStretchFactor(1, 1)
+        log_splitter.setSizes([600, 600])
+        log_splitter.setMaximumHeight(220)
+
+        right_layout.addWidget(log_splitter)
 
         splitter.addWidget(left)
         splitter.addWidget(right)
@@ -196,6 +220,12 @@ class MainWindow(QMainWindow):
     def _log(self, message: str) -> None:
         self.log_text.append(message)
         self.statusBar().showMessage(message, 5000)
+
+    def _log_error(self, message: str) -> None:
+        from datetime import datetime
+
+        ts = datetime.now().strftime("%H:%M:%S")
+        self.error_text.append(f"[{ts}] {message}")
 
     def _refresh_objects(self) -> None:
         current_id = self.sidebar.current_object_id()
@@ -490,7 +520,9 @@ class MainWindow(QMainWindow):
             return
         result = self.ffplay.launch(cam.rtsp_url, f"{cam.object_name} / {cam.camera_name}")
         if not result.ok:
-            QMessageBox.warning(self, "FFplay", result.error or "Не удалось открыть поток")
+            err = result.error or "Не удалось открыть поток"
+            QMessageBox.warning(self, "FFplay", err)
+            self._log_error(f"FFPLAY: {cam.object_name} / {cam.camera_name} — {err}")
             return
         self._log(f"Открыт поток: {cam.camera_name}")
         self.lower()
@@ -549,10 +581,17 @@ class MainWindow(QMainWindow):
             last_error=result.error,
             last_seen_online_at=result.seen_online_at,
         )
+        cam = self.repo.get_camera(result.camera_id)
+        cam_label = (
+            f"{cam.object_name} / {cam.camera_name}" if cam else f"camera_id={result.camera_id}"
+        )
         self._log(
             f"Проверка завершена camera_id={result.camera_id}: {result.status}"
             + (f" ({result.error})" if result.error else "")
         )
+        if result.status != "online":
+            err_part = f" — {result.error}" if result.error else ""
+            self._log_error(f"{result.status.upper()}: {cam_label}{err_part}")
         if not self._refresh_debounce.isActive():
             self._refresh_debounce.start()
 
@@ -568,6 +607,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             tb = traceback.format_exc()
             self._log(f"Ошибка открытия импорта: {exc}")
+            self._log_error(f"IMPORT: {exc}")
             QMessageBox.critical(self, "Импорт", f"Не удалось открыть окно импорта:\n{exc}\n\n{tb}")
             return
         dlg.import_completed.connect(self._on_import_completed)
@@ -615,6 +655,7 @@ class MainWindow(QMainWindow):
         log_message = ("OK: " if ok else "ERROR: ") + message.strip()
         self._log(log_message)
         if not ok:
+            self._log_error(f"GIT PULL: {message.strip()[:200]}")
             QMessageBox.warning(self, "GitHub", message.strip() or "Не удалось обновить из GitHub")
         else:
             QMessageBox.information(
