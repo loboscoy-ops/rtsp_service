@@ -1,18 +1,12 @@
 from __future__ import annotations
 
-from functools import partial
-
-from PySide6.QtCore import Qt, QSettings, Signal
+from PySide6.QtCore import QPoint, Qt, QSettings, Signal
 from PySide6.QtGui import QAction, QGuiApplication, QKeyEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QHBoxLayout,
-    QHeaderView,
     QMenu,
-    QPushButton,
     QTableWidget,
     QTableWidgetItem,
-    QWidget,
 )
 
 from app.database.models import CameraModel
@@ -27,6 +21,7 @@ class CameraTable(QTableWidget):
     edit_requested = Signal(int)
     delete_requested = Signal(int)
     coordinates_copied = Signal(str)
+    rtsp_copied = Signal(str)
     sort_changed = Signal(int, Qt.SortOrder)
 
     COLUMNS = [
@@ -41,14 +36,13 @@ class CameraTable(QTableWidget):
         "Последняя проверка",
         "Ошибка",
         "RTSP",
-        "Действия",
     ]
     COL_NUM, COL_OBJECT, COL_UIN, COL_ID, COL_NAME = 0, 1, 2, 3, 4
     COL_TYPE, COL_GPS = 5, 6
     COL_STATUS, COL_CHECKED, COL_ERR = 7, 8, 9
-    COL_RTSP, COL_ACTIONS = 10, 11
+    COL_RTSP = 10
     COL_SEEN = -1
-    SETTINGS_HIDDEN_KEY = "camera_table/hidden_columns_v3"
+    SETTINGS_HIDDEN_KEY = "camera_table/hidden_columns_v4"
 
     def __init__(self):
         super().__init__(0, len(self.COLUMNS))
@@ -60,6 +54,7 @@ class CameraTable(QTableWidget):
         self.setAlternatingRowColors(True)
         self.horizontalHeader().setStretchLastSection(True)
         self.cellClicked.connect(self._on_cell_clicked)
+        self.cellDoubleClicked.connect(self._on_cell_double_clicked)
 
         header = self.horizontalHeader()
         header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -70,11 +65,12 @@ class CameraTable(QTableWidget):
         self._sort_column = self.COL_OBJECT
         self._sort_order = Qt.SortOrder.AscendingOrder
 
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_row_menu)
+
         self._restore_visibility()
 
     def _on_section_clicked(self, column: int) -> None:
-        if column == self.COL_ACTIONS:
-            return
         if column == self._sort_column:
             self._sort_order = (
                 Qt.SortOrder.DescendingOrder
@@ -185,42 +181,116 @@ class CameraTable(QTableWidget):
         self.setItem(row, self.COL_STATUS, status_cell)
         self.setItem(row, self.COL_CHECKED, QTableWidgetItem(iso_to_human(cam.last_checked_at)))
         self.setItem(row, self.COL_ERR, QTableWidgetItem(cam.last_error or ""))
-        self.setItem(row, self.COL_RTSP, QTableWidgetItem(mask_rtsp_url(cam.rtsp_url)))
+        rtsp_item = QTableWidgetItem(mask_rtsp_url(cam.rtsp_url))
+        rtsp_item.setData(Qt.ItemDataRole.UserRole, cam.rtsp_url)
+        rtsp_item.setToolTip(
+            "ПКМ → действия. Двойной клик откроет поток в ffplay."
+        )
+        self.setItem(row, self.COL_RTSP, rtsp_item)
 
-        action_widget = QWidget()
-        layout = QHBoxLayout(action_widget)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(4)
+    # --- row context menu / actions -----------------------------------
 
-        open_btn = QPushButton("Открыть")
-        check_btn = QPushButton("Проверить")
-        edit_btn = QPushButton("Изм.")
-        delete_btn = QPushButton("Удалить")
+    def _row_camera_id(self, row: int) -> int | None:
+        if row < 0 or row >= self.rowCount():
+            return None
+        for col in (self.COL_NUM, self.COL_ID, self.COL_OBJECT):
+            item = self.item(row, col)
+            if not item:
+                continue
+            data = item.data(Qt.ItemDataRole.UserRole)
+            try:
+                if data is not None:
+                    return int(data)
+            except (TypeError, ValueError):
+                continue
+        return None
 
-        open_btn.clicked.connect(partial(self.open_requested.emit, cam.id))
-        check_btn.clicked.connect(partial(self.check_requested.emit, cam.id))
-        edit_btn.clicked.connect(partial(self.edit_requested.emit, cam.id))
-        delete_btn.clicked.connect(partial(self.delete_requested.emit, cam.id))
+    def _show_row_menu(self, pos: QPoint) -> None:
+        index = self.indexAt(pos)
+        if not index.isValid():
+            return
+        row = index.row()
+        cam_id = self._row_camera_id(row)
+        if cam_id is None:
+            return
+        self.selectRow(row)
 
-        for btn in (open_btn, check_btn, edit_btn, delete_btn):
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            layout.addWidget(btn)
+        menu = QMenu(self)
+        open_act = QAction("Открыть поток (⌘⏎)", menu)
+        open_act.triggered.connect(lambda: self.open_requested.emit(cam_id))
+        menu.addAction(open_act)
 
-        self.setCellWidget(row, self.COL_ACTIONS, action_widget)
+        check_act = QAction("Проверить", menu)
+        check_act.triggered.connect(lambda: self.check_requested.emit(cam_id))
+        menu.addAction(check_act)
 
-    # --- copy gps ------------------------------------------------------
+        menu.addSeparator()
+
+        edit_act = QAction("Изменить…", menu)
+        edit_act.triggered.connect(lambda: self.edit_requested.emit(cam_id))
+        menu.addAction(edit_act)
+
+        gps = self._gps_for_row(row)
+        copy_gps_act = QAction("Копировать координаты", menu)
+        copy_gps_act.setEnabled(bool(gps))
+        copy_gps_act.triggered.connect(lambda: self._copy_gps_text(gps))
+        menu.addAction(copy_gps_act)
+
+        rtsp = self._rtsp_for_row(row)
+        copy_rtsp_act = QAction("Копировать RTSP-ссылку", menu)
+        copy_rtsp_act.setEnabled(bool(rtsp))
+        copy_rtsp_act.triggered.connect(lambda: self._copy_rtsp_text(rtsp))
+        menu.addAction(copy_rtsp_act)
+
+        menu.addSeparator()
+        delete_act = QAction("Удалить (Backspace)", menu)
+        delete_act.triggered.connect(lambda: self.delete_requested.emit(cam_id))
+        menu.addAction(delete_act)
+
+        menu.exec(self.viewport().mapToGlobal(pos))
+
+    def _gps_for_row(self, row: int) -> str:
+        item = self.item(row, self.COL_GPS)
+        if not item:
+            return ""
+        text = item.data(Qt.ItemDataRole.UserRole) or item.text()
+        return str(text or "").strip()
+
+    def _rtsp_for_row(self, row: int) -> str:
+        item = self.item(row, self.COL_RTSP)
+        if not item:
+            return ""
+        text = item.data(Qt.ItemDataRole.UserRole) or item.text()
+        return str(text or "").strip()
+
+    def _copy_gps_text(self, text: str) -> None:
+        if not text:
+            return
+        QGuiApplication.clipboard().setText(text)
+        self.coordinates_copied.emit(text)
+
+    def _copy_rtsp_text(self, text: str) -> None:
+        if not text:
+            return
+        QGuiApplication.clipboard().setText(text)
+        self.rtsp_copied.emit(text)
 
     def _on_cell_clicked(self, row: int, column: int) -> None:
         if column != self.COL_GPS:
             return
-        item = self.item(row, column)
-        if not item:
-            return
-        text = item.data(Qt.ItemDataRole.UserRole) or item.text()
+        text = self._gps_for_row(row)
         if not text:
             return
-        QGuiApplication.clipboard().setText(str(text))
-        item.setToolTip(f"Скопировано: {text}\n(кликните ещё раз чтобы скопировать снова)")
+        self._copy_gps_text(text)
+        item = self.item(row, column)
+        if item:
+            item.setToolTip(f"Скопировано: {text}\n(кликните ещё раз чтобы скопировать снова)")
+
+    def _on_cell_double_clicked(self, row: int, column: int) -> None:
+        cam_id = self._row_camera_id(row)
+        if cam_id is None:
+            return
+        self.open_requested.emit(cam_id)
 
     # --- column visibility --------------------------------------------
 

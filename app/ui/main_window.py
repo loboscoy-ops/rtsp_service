@@ -168,6 +168,7 @@ class MainWindow(QMainWindow):
         self.table.edit_requested.connect(self._edit_camera)
         self.table.delete_requested.connect(self._delete_camera)
         self.table.coordinates_copied.connect(self._on_coords_copied)
+        self.table.rtsp_copied.connect(self._on_rtsp_copied)
         self.table.sort_changed.connect(self._on_sort_changed)
         self.checker.camera_checked.connect(self._on_camera_checked)
 
@@ -431,6 +432,11 @@ class MainWindow(QMainWindow):
 
     def _on_coords_copied(self, coords: str) -> None:
         self._log(f"Координаты скопированы: {coords}")
+
+    def _on_rtsp_copied(self, url: str) -> None:
+        from app.utils.validators import mask_rtsp_url
+
+        self._log(f"RTSP-ссылка скопирована: {mask_rtsp_url(url)}")
 
     def _on_camera_checked(self, result: CheckResult) -> None:
         self.repo.update_camera_status(
