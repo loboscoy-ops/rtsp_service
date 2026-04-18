@@ -31,6 +31,12 @@ class CameraCheckWorker(QRunnable):
         self.setAutoDelete(True)
 
     def _emit(self, result: CheckResult) -> None:
+        # Всегда префиксуем offline-ошибку кодом 0x00 (если ещё не префиксована).
+        if result.status == "offline":
+            code = config.OFFLINE_ERROR_CODE
+            text = (result.error or "").strip()
+            if code and not text.startswith(code):
+                result.error = f"{code} {text}".strip()
         try:
             self._result_signal.emit(result)
         except RuntimeError:
