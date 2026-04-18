@@ -166,11 +166,15 @@ class MainWindow(QMainWindow):
         pix = QPixmap(str(config.LOGO_PATH))
         if pix.isNull():
             return
-        pix = pix.scaledToHeight(28, Qt.TransformationMode.SmoothTransformation)
+        target_h = 84  # ~3× от прежних 28 px
+        pix = pix.scaledToHeight(target_h, Qt.TransformationMode.SmoothTransformation)
         self.logo_label = QLabel()
         self.logo_label.setPixmap(pix)
         self.logo_label.setToolTip("УРУС")
         self.logo_label.setContentsMargins(8, 0, 8, 0)
+        self.logo_label.setFixedHeight(target_h)
+        self.statusBar().setSizeGripEnabled(False)
+        self.statusBar().setFixedHeight(target_h + 8)
         self.statusBar().addPermanentWidget(self.logo_label)
 
     def _bind_signals(self) -> None:
