@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 APP_NAME = "RTSP Camera Monitor"
-APP_VERSION = "0.1.14"
+APP_VERSION = "0.1.15"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 IS_FROZEN = bool(getattr(sys, "frozen", False))
@@ -60,6 +60,10 @@ EXCEL_TEMPLATE_HEADERS = [
 
 CHECK_INTERVAL_SEC = int(os.getenv("RTSP_CHECK_INTERVAL_SEC", "60"))
 CHECK_TIMEOUT_SEC = int(os.getenv("RTSP_CHECK_TIMEOUT_SEC", "5"))
+# Глубокая проверка для камер со статусом unknown — даём им больше времени.
+CHECK_TIMEOUT_DEEP_SEC = int(os.getenv("RTSP_CHECK_TIMEOUT_DEEP_SEC", "10"))
+# Код в колонке «Ошибка», если глубокая проверка всё равно не достучалась.
+UNKNOWN_DEEP_FAIL_CODE = os.getenv("RTSP_UNKNOWN_DEEP_FAIL_CODE", "0x03")
 MAX_CONCURRENT_CHECKS = int(os.getenv("RTSP_MAX_CONCURRENT_CHECKS", "6"))
 
 FFPROBE_BIN = os.getenv("RTSP_FFPROBE_BIN", "ffprobe")
