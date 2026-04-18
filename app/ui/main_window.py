@@ -270,6 +270,12 @@ class MainWindow(QMainWindow):
                 return (cam.gps_coords or "").lower()
             if col == T.COL_STATUS:
                 return status_rank.get(cam.status, 9)
+            if col == T.COL_PING:
+                if cam.last_ping_ok is None:
+                    return (2, 0)
+                if not cam.last_ping_ok:
+                    return (1, 0)
+                return (0, cam.last_ping_ms if cam.last_ping_ms is not None else 0)
             if col == T.COL_CHECKED:
                 return cam.last_checked_at or ""
             if col == T.COL_ERR:
@@ -580,18 +586,27 @@ class MainWindow(QMainWindow):
             last_checked_at=result.checked_at,
             last_error=result.error,
             last_seen_online_at=result.seen_online_at,
+            last_ping_ok=result.ping_ok,
+            last_ping_ms=result.ping_ms,
         )
         cam = self.repo.get_camera(result.camera_id)
         cam_label = (
             f"{cam.object_name} / {cam.camera_name}" if cam else f"camera_id={result.camera_id}"
         )
+        if result.ping_ok is None:
+            ping_part = ""
+        elif result.ping_ok:
+            ping_part = f" [ping {result.ping_ms} ms]" if result.ping_ms is not None else " [ping OK]"
+        else:
+            ping_part = " [ping ✕]"
         self._log(
             f"Проверка завершена camera_id={result.camera_id}: {result.status}"
             + (f" ({result.error})" if result.error else "")
+            + ping_part
         )
         if result.status != "online":
             err_part = f" — {result.error}" if result.error else ""
-            self._log_error(f"{result.status.upper()}: {cam_label}{err_part}")
+            self._log_error(f"{result.status.upper()}: {cam_label}{err_part}{ping_part}")
         if not self._refresh_debounce.isActive():
             self._refresh_debounce.start()
 

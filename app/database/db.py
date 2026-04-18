@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS cameras (
   last_seen_online_at TEXT NULL,
   last_checked_at TEXT NULL,
   last_error TEXT NULL,
+  last_ping_ok INTEGER NULL,
+  last_ping_ms INTEGER NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY(object_id) REFERENCES objects(id) ON DELETE CASCADE,
@@ -45,6 +47,10 @@ def _ensure_columns(conn) -> None:
         conn.execute("ALTER TABLE cameras ADD COLUMN gps_coords TEXT NOT NULL DEFAULT ''")
     if "uin" not in cols:
         conn.execute("ALTER TABLE cameras ADD COLUMN uin TEXT NOT NULL DEFAULT ''")
+    if "last_ping_ok" not in cols:
+        conn.execute("ALTER TABLE cameras ADD COLUMN last_ping_ok INTEGER NULL")
+    if "last_ping_ms" not in cols:
+        conn.execute("ALTER TABLE cameras ADD COLUMN last_ping_ms INTEGER NULL")
     # Однократная миграция: распарсить старые group_name вида "Тип 2 | GPS 55.7, 37.6"
     rows = conn.execute(
         "SELECT id, group_name, gps_coords FROM cameras WHERE gps_coords = '' AND group_name LIKE '%GPS%'"

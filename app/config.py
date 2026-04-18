@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 APP_NAME = "RTSP Camera Monitor"
-APP_VERSION = "0.1.27"
+APP_VERSION = "0.1.28"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 IS_FROZEN = bool(getattr(sys, "frozen", False))
@@ -83,6 +83,10 @@ UNKNOWN_OFFLINE_FAIL_MESSAGE = os.getenv(
 # Префикс-код, который ставится в колонку «Ошибка» для любой offline-камеры.
 OFFLINE_ERROR_CODE = os.getenv("RTSP_OFFLINE_ERROR_CODE", "0x00")
 MAX_CONCURRENT_CHECKS = int(os.getenv("RTSP_MAX_CONCURRENT_CHECKS", "6"))
+
+# Параллельная ICMP-проверка хоста камеры (отделяет «сеть упала» от «RTSP сломан»).
+PING_ENABLED = os.getenv("RTSP_PING_ENABLED", "1") == "1"
+PING_TIMEOUT_SEC = int(os.getenv("RTSP_PING_TIMEOUT_SEC", "2"))
 
 FFPROBE_BIN = os.getenv("RTSP_FFPROBE_BIN", "ffprobe")
 FFPLAY_BIN = os.getenv("RTSP_FFPLAY_BIN", "ffplay")

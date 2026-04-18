@@ -72,6 +72,8 @@ class Repository:
         keys = row.keys() if hasattr(row, "keys") else []
         gps = row["gps_coords"] if "gps_coords" in keys else ""
         uin = row["uin"] if "uin" in keys else ""
+        ping_ok_raw = row["last_ping_ok"] if "last_ping_ok" in keys else None
+        ping_ms_raw = row["last_ping_ms"] if "last_ping_ms" in keys else None
         return CameraModel(
             id=row["id"],
             object_id=row["object_id"],
@@ -89,6 +91,8 @@ class Repository:
             last_error=row["last_error"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            last_ping_ok=None if ping_ok_raw is None else bool(ping_ok_raw),
+            last_ping_ms=int(ping_ms_raw) if ping_ms_raw is not None else None,
         )
 
     def list_cameras(
@@ -350,25 +354,47 @@ class Repository:
         last_checked_at: str,
         last_error: str | None,
         last_seen_online_at: str | None = None,
+        last_ping_ok: bool | None = None,
+        last_ping_ms: int | None = None,
     ) -> None:
+        ping_ok_val = None if last_ping_ok is None else int(bool(last_ping_ok))
         with get_connection() as conn:
             if status == "online":
                 conn.execute(
                     """
                     UPDATE cameras
-                    SET status = ?, last_checked_at = ?, last_error = ?, last_seen_online_at = ?, updated_at = ?
+                    SET status = ?, last_checked_at = ?, last_error = ?, last_seen_online_at = ?,
+                        last_ping_ok = ?, last_ping_ms = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (status, last_checked_at, last_error, last_seen_online_at, now_iso(), camera_id),
+                    (
+                        status,
+                        last_checked_at,
+                        last_error,
+                        last_seen_online_at,
+                        ping_ok_val,
+                        last_ping_ms,
+                        now_iso(),
+                        camera_id,
+                    ),
                 )
             else:
                 conn.execute(
                     """
                     UPDATE cameras
-                    SET status = ?, last_checked_at = ?, last_error = ?, updated_at = ?
+                    SET status = ?, last_checked_at = ?, last_error = ?,
+                        last_ping_ok = ?, last_ping_ms = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (status, last_checked_at, last_error, now_iso(), camera_id),
+                    (
+                        status,
+                        last_checked_at,
+                        last_error,
+                        ping_ok_val,
+                        last_ping_ms,
+                        now_iso(),
+                        camera_id,
+                    ),
                 )
 
     def count_all_cameras(self) -> int:

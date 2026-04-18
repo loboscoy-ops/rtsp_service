@@ -32,4 +32,6 @@ class CameraModel:
     last_error: str | None
     created_at: str
     updated_at: str
+    last_ping_ok: bool | None = None
+    last_ping_ms: int | None = None
 

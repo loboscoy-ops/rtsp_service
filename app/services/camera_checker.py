@@ -8,6 +8,7 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 from app import config
 from app.database.models import CameraModel
 from app.utils.datetime_utils import now_iso
+from app.utils.ping_utils import host_from_rtsp_url, ping_host
 from app.utils.process_utils import ensure_binary_exists, run_command
 from app.utils.validators import is_valid_rtsp_url
 
@@ -19,6 +20,8 @@ class CheckResult:
     checked_at: str
     error: str | None
     seen_online_at: str | None
+    ping_ok: bool | None = None
+    ping_ms: int | None = None
 
 
 class CameraCheckWorker(QRunnable):
@@ -37,6 +40,11 @@ class CameraCheckWorker(QRunnable):
             text = (result.error or "").strip()
             if code and not text.startswith(code):
                 result.error = f"{code} {text}".strip()
+        # Вписываем результат ping (если измерили), не ломая статус.
+        if hasattr(self, "_ping_result") and self._ping_result is not None:
+            ok, ms = self._ping_result
+            result.ping_ok = ok
+            result.ping_ms = ms
         try:
             self._result_signal.emit(result)
         except RuntimeError:
@@ -46,6 +54,15 @@ class CameraCheckWorker(QRunnable):
     def run(self) -> None:
         checked_at = now_iso()
         last_seen = self.camera.last_seen_online_at
+        self._ping_result: tuple[bool, int | None] | None = None
+
+        # Параллельных тредов не плодим — пинг быстрый, делаем синхронно перед ffprobe.
+        host = host_from_rtsp_url(self.camera.rtsp_url)
+        if host and config.PING_ENABLED:
+            try:
+                self._ping_result = ping_host(host, config.PING_TIMEOUT_SEC)
+            except Exception:
+                self._ping_result = (False, None)
 
         if not self.camera.enabled:
             self._emit(

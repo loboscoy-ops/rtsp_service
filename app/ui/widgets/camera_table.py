@@ -35,17 +35,18 @@ class CameraTable(QTableWidget):
         "Тип",
         "Координаты",
         "Статус",
+        "Сеть",
         "Последняя проверка",
         "Ошибка",
         "RTSP",
     ]
     COL_NUM, COL_OBJECT, COL_UIN, COL_NAME = 0, 1, 2, 3
     COL_TYPE, COL_GPS = 4, 5
-    COL_STATUS, COL_CHECKED, COL_ERR = 6, 7, 8
-    COL_RTSP = 9
+    COL_STATUS, COL_PING, COL_CHECKED, COL_ERR = 6, 7, 8, 9
+    COL_RTSP = 10
     COL_ID = -1
     COL_SEEN = -1
-    SETTINGS_HIDDEN_KEY = "camera_table/hidden_columns_v5"
+    SETTINGS_HIDDEN_KEY = "camera_table/hidden_columns_v6"
 
     def __init__(self):
         super().__init__(0, len(self.COLUMNS))
@@ -196,6 +197,9 @@ class CameraTable(QTableWidget):
             )
         self.setItem(row, self.COL_STATUS, status_cell)
 
+        ping_item = self._build_ping_item(cam)
+        self.setItem(row, self.COL_PING, ping_item)
+
         checked_item = QTableWidgetItem(iso_to_human(cam.last_checked_at))
         self._set_hover_tooltip(checked_item, iso_to_human(cam.last_checked_at))
         self.setItem(row, self.COL_CHECKED, checked_item)
@@ -215,6 +219,33 @@ class CameraTable(QTableWidget):
         text = (value or "").strip()
         if text:
             item.setToolTip(f"{text}\n\nПКМ → «Копировать»")
+
+    def _build_ping_item(self, cam: CameraModel) -> QTableWidgetItem:
+        from PySide6.QtGui import QBrush, QColor
+
+        if cam.last_ping_ok is None:
+            text = "—"
+            tooltip = "ICMP-пинг ещё не выполнялся"
+            color = None
+        elif cam.last_ping_ok:
+            if cam.last_ping_ms is not None:
+                text = f"{cam.last_ping_ms} ms"
+                tooltip = f"Хост отвечает на ICMP, RTT {cam.last_ping_ms} ms"
+            else:
+                text = "OK"
+                tooltip = "Хост отвечает на ICMP"
+            color = QColor("#3ecf8e")
+        else:
+            text = "нет ответа"
+            tooltip = "Хост не отвечает на ICMP — возможно, сеть до камеры лежит"
+            color = QColor("#ff8b8b")
+
+        item = QTableWidgetItem(text)
+        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        if color is not None:
+            item.setForeground(QBrush(color))
+        item.setToolTip(tooltip)
+        return item
 
     # --- row context menu / actions -----------------------------------
 
