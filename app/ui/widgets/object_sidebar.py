@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QKeyEvent
-from PySide6.QtWidgets import QListWidget, QListWidgetItem
+from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtGui import QAction, QKeyEvent
+from PySide6.QtWidgets import QListWidget, QListWidgetItem, QMenu
 
 from app.database.models import ObjectModel
 
@@ -10,10 +10,14 @@ from app.database.models import ObjectModel
 class ObjectSidebar(QListWidget):
     object_selected = Signal(int)
     delete_requested = Signal(int)
+    rename_requested = Signal(int)
 
     def __init__(self):
         super().__init__()
         self.currentItemChanged.connect(self._on_current_changed)
+        self.itemDoubleClicked.connect(self._on_item_double_clicked)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._on_context_menu)
 
     def populate(self, objects: list[ObjectModel]) -> None:
         self.blockSignals(True)
@@ -55,9 +59,34 @@ class ObjectSidebar(QListWidget):
                 self.delete_requested.emit(obj_id)
                 event.accept()
                 return
+        if event.key() == Qt.Key.Key_F2:
+            obj_id = self.current_object_id()
+            if obj_id is not None:
+                self.rename_requested.emit(obj_id)
+                event.accept()
+                return
         super().keyPressEvent(event)
 
     def _on_current_changed(self, current: QListWidgetItem | None, _prev: QListWidgetItem | None) -> None:
         if not current:
             return
         self.object_selected.emit(int(current.data(Qt.ItemDataRole.UserRole)))
+
+    def _on_item_double_clicked(self, item: QListWidgetItem) -> None:
+        if not item:
+            return
+        self.rename_requested.emit(int(item.data(Qt.ItemDataRole.UserRole)))
+
+    def _on_context_menu(self, pos: QPoint) -> None:
+        item = self.itemAt(pos)
+        if not item:
+            return
+        obj_id = int(item.data(Qt.ItemDataRole.UserRole))
+        menu = QMenu(self)
+        rename_act = QAction("Переименовать (F2)", menu)
+        rename_act.triggered.connect(lambda: self.rename_requested.emit(obj_id))
+        menu.addAction(rename_act)
+        delete_act = QAction("Удалить (Backspace)", menu)
+        delete_act.triggered.connect(lambda: self.delete_requested.emit(obj_id))
+        menu.addAction(delete_act)
+        menu.exec(self.viewport().mapToGlobal(pos))

@@ -7,6 +7,7 @@ import shutil
 import subprocess
 from PySide6.QtWidgets import (
     QComboBox,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -161,6 +162,7 @@ class MainWindow(QMainWindow):
     def _bind_signals(self) -> None:
         self.sidebar.object_selected.connect(self._on_object_selected)
         self.sidebar.delete_requested.connect(self._delete_object)
+        self.sidebar.rename_requested.connect(self._rename_object)
         self.table.open_requested.connect(self._open_camera_stream)
         self.table.check_requested.connect(self._check_single_camera)
         self.table.edit_requested.connect(self._edit_camera)
@@ -320,6 +322,45 @@ class MainWindow(QMainWindow):
         self._refresh_objects()
         self._refresh_cameras()
         self._log(f"Удалена камера: {cam.camera_name}")
+
+    def _rename_object(self, object_id: int) -> None:
+        obj = next((o for o in self.objects_cache if o.id == object_id), None)
+        if not obj:
+            return
+        new_name, ok = QInputDialog.getText(
+            self,
+            "Переименовать объект",
+            "Новое название объекта:",
+            QLineEdit.EchoMode.Normal,
+            obj.name,
+        )
+        if not ok:
+            return
+        new_name = (new_name or "").strip()
+        if not new_name:
+            QMessageBox.warning(self, "Переименование", "Название не может быть пустым")
+            return
+        if new_name == obj.name:
+            return
+        clash = next(
+            (o for o in self.objects_cache if o.id != object_id and o.name.lower() == new_name.lower()),
+            None,
+        )
+        if clash:
+            QMessageBox.warning(
+                self,
+                "Переименование",
+                f"Объект с названием «{new_name}» уже существует.",
+            )
+            return
+        try:
+            self.repo.update_object(object_id, new_name)
+        except Exception as exc:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось переименовать объект:\n{exc}")
+            return
+        self._refresh_objects()
+        self._refresh_cameras()
+        self._log(f"Объект переименован: «{obj.name}» → «{new_name}»")
 
     def _delete_object(self, object_id: int) -> None:
         obj = next((o for o in self.objects_cache if o.id == object_id), None)
