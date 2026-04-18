@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 APP_NAME = "RTSP Camera Monitor"
-APP_VERSION = "0.1.15"
+APP_VERSION = "0.1.16"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 IS_FROZEN = bool(getattr(sys, "frozen", False))
@@ -64,6 +64,13 @@ CHECK_TIMEOUT_SEC = int(os.getenv("RTSP_CHECK_TIMEOUT_SEC", "5"))
 CHECK_TIMEOUT_DEEP_SEC = int(os.getenv("RTSP_CHECK_TIMEOUT_DEEP_SEC", "10"))
 # Код в колонке «Ошибка», если глубокая проверка всё равно не достучалась.
 UNKNOWN_DEEP_FAIL_CODE = os.getenv("RTSP_UNKNOWN_DEEP_FAIL_CODE", "0x03")
+# «Финальная» проверка для unknown + 0x03: длинный таймаут, после которого камера уходит в offline.
+CHECK_TIMEOUT_ULTRA_SEC = int(os.getenv("RTSP_CHECK_TIMEOUT_ULTRA_SEC", "120"))
+# Текст ошибки, который попадает в колонку «Ошибка» при offline после финальной проверки.
+UNKNOWN_OFFLINE_FAIL_MESSAGE = os.getenv(
+    "RTSP_UNKNOWN_OFFLINE_FAIL_MESSAGE",
+    "RTSP не запускается (0x03)",
+)
 MAX_CONCURRENT_CHECKS = int(os.getenv("RTSP_MAX_CONCURRENT_CHECKS", "6"))
 
 FFPROBE_BIN = os.getenv("RTSP_FFPROBE_BIN", "ffprobe")

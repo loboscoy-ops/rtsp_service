@@ -78,12 +78,21 @@ class CameraCheckWorker(QRunnable):
             )
             return
 
-        # Глубокая проверка камер, уже находящихся в "unknown" — больше времени и явный код ошибки.
-        is_deep = self.camera.status == "unknown"
-        timeout_sec = max(
-            1,
-            config.CHECK_TIMEOUT_DEEP_SEC if is_deep else config.CHECK_TIMEOUT_SEC,
-        )
+        # Три уровня проверки:
+        #   normal — здоровые/offline камеры: короткий таймаут.
+        #   deep   — статус unknown без кода: даём больше времени, при тайм-ауте пишем 0x03.
+        #   ultra  — статус unknown + 0x03: длинный таймаут, при тайм-ауте уходим в offline.
+        prev_status = self.camera.status
+        prev_error = (self.camera.last_error or "").strip()
+        is_ultra = prev_status == "unknown" and prev_error == config.UNKNOWN_DEEP_FAIL_CODE
+        is_deep = (not is_ultra) and prev_status == "unknown"
+
+        if is_ultra:
+            timeout_sec = max(1, config.CHECK_TIMEOUT_ULTRA_SEC)
+        elif is_deep:
+            timeout_sec = max(1, config.CHECK_TIMEOUT_DEEP_SEC)
+        else:
+            timeout_sec = max(1, config.CHECK_TIMEOUT_SEC)
 
         cmd = [
             config.FFPROBE_BIN,
@@ -104,17 +113,7 @@ class CameraCheckWorker(QRunnable):
         try:
             proc = run_command(cmd, timeout_sec=max(2, timeout_sec + 2))
         except subprocess.TimeoutExpired:
-            # Не подключились дольше таймаута → unknown.
-            # Если это уже была глубокая повторная проверка — фиксируем код 0x03.
-            self._emit(
-                CheckResult(
-                    camera_id=self.camera.id,
-                    status="unknown",
-                    checked_at=checked_at,
-                    error=config.UNKNOWN_DEEP_FAIL_CODE if is_deep else None,
-                    seen_online_at=last_seen,
-                )
-            )
+            self._emit(self._timeout_result(checked_at, last_seen, is_deep, is_ultra))
             return
         except Exception as exc:
             self._emit(
@@ -142,16 +141,7 @@ class CameraCheckWorker(QRunnable):
 
         err = (proc.stderr or proc.stdout or f"Код {proc.returncode}").strip()
         if "timed out" in err.lower() or "timeout" in err.lower():
-            # ffprobe сам сообщил тайм-аут — для глубокой проверки ставим код 0x03.
-            self._emit(
-                CheckResult(
-                    camera_id=self.camera.id,
-                    status="unknown",
-                    checked_at=checked_at,
-                    error=config.UNKNOWN_DEEP_FAIL_CODE if is_deep else None,
-                    seen_online_at=last_seen,
-                )
-            )
+            self._emit(self._timeout_result(checked_at, last_seen, is_deep, is_ultra))
             return
         # Любая другая ошибка от ffprobe (отказ соединения, 401, 404, и т. п.) → offline.
         self._emit(
@@ -162,6 +152,30 @@ class CameraCheckWorker(QRunnable):
                 error=err[:500],
                 seen_online_at=last_seen,
             )
+        )
+
+    def _timeout_result(
+        self,
+        checked_at: str,
+        last_seen: str | None,
+        is_deep: bool,
+        is_ultra: bool,
+    ) -> CheckResult:
+        if is_ultra:
+            # Финальная 2-минутная проверка не достучалась — уводим камеру в offline с понятной ошибкой.
+            return CheckResult(
+                camera_id=self.camera.id,
+                status="offline",
+                checked_at=checked_at,
+                error=config.UNKNOWN_OFFLINE_FAIL_MESSAGE,
+                seen_online_at=last_seen,
+            )
+        return CheckResult(
+            camera_id=self.camera.id,
+            status="unknown",
+            checked_at=checked_at,
+            error=config.UNKNOWN_DEEP_FAIL_CODE if is_deep else None,
+            seen_online_at=last_seen,
         )
 
 
