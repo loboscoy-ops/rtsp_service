@@ -163,17 +163,16 @@ class CameraCheckWorker(QRunnable):
     @staticmethod
     def _build_ffprobe_cmd(url: str, transport: str, timeout_sec: int) -> list[str]:
         timeout_us = str(timeout_sec * 1_000_000)
-        # -probesize/-analyzeduration режут «лишнее» ожидание метаданных:
-        # нам достаточно убедиться, что format_name определился.
+        # ВАЖНО: не добавляем -stimeout/-probesize/-analyzeduration.
+        # На некоторых сборках ffmpeg -stimeout вызывает «Unrecognized option»,
+        # а слишком агрессивный probesize не даёт SDP распарситься —
+        # из-за этого камеры начинают казаться «timeout», хотя проблема в флагах.
         return [
             config.FFPROBE_BIN,
             "-v", "error",
             "-rtsp_transport", transport,
             "-rw_timeout", timeout_us,
-            "-stimeout", timeout_us,   # для новых ffmpeg вместо -timeout
             "-timeout", timeout_us,
-            "-probesize", "32",
-            "-analyzeduration", "0",
             "-show_entries", "format=format_name",
             "-of", "default=nw=1:nk=1",
             url,
@@ -265,8 +264,16 @@ class CameraCheckWorker(QRunnable):
 
 
 def _looks_like_timeout(err: str) -> bool:
+    """True если stderr ffprobe реально про сетевой таймаут.
+
+    Раньше тут было `"timeout" in text`, но это ложно срабатывало на
+    «Unrecognized option 'stimeout'» и подобных строках, в результате
+    мы засчитывали ошибку парсинга аргументов как таймаут.
+    """
     text = err.lower()
-    return "timed out" in text or "timeout" in text
+    if "unrecognized option" in text or "invalid argument" in text:
+        return False
+    return "timed out" in text or "operation timed out" in text or "i/o timeout" in text
 
 
 @dataclass

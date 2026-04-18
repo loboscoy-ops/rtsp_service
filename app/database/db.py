@@ -82,6 +82,7 @@ def initialize_database(db_path: Path | None = None) -> None:
         conn.executescript(SCHEMA)
         _ensure_columns(conn)
         _normalize_error_codes(conn)
+        _migrate_clear_v031_spurious_deep_fail(conn)
         conn.commit()
 
 
@@ -98,6 +99,27 @@ def _normalize_error_codes(conn) -> None:
         f"WHERE status = 'unknown' AND TRIM(IFNULL(last_error, '')) IN ({placeholders})",
         (msg, *legacy_codes),
     )
+
+
+def _migrate_clear_v031_spurious_deep_fail(conn) -> None:
+    """v0.1.31 имел баг: ffprobe валился на «-stimeout», а наш детектор
+    таймаута видел подстроку «timeout» в «Unrecognized option 'stimeout'»
+    и помечал живые камеры кодом deep-fail. После рестарта они уходили
+    бы сразу в 120-секундный ULTRA-режим. Сбрасываем эти отметки один раз
+    (через PRAGMA user_version), чтобы следующая проверка пошла по
+    нормальному (или DEEP) пути и быстро вернула реальные статусы.
+    """
+    target_version = 1
+    cur_version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if cur_version >= target_version:
+        return
+    msg = config.UNKNOWN_DEEP_FAIL_MESSAGE
+    conn.execute(
+        "UPDATE cameras SET last_error = NULL "
+        "WHERE status = 'unknown' AND TRIM(IFNULL(last_error, '')) = ?",
+        (msg,),
+    )
+    conn.execute(f"PRAGMA user_version = {target_version}")
 
 
 @contextmanager
