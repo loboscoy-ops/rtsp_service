@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
-
 import shutil
 import subprocess
+import traceback
+from datetime import datetime
+from typing import Callable, Optional
+
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
     QInputDialog,
@@ -26,13 +29,32 @@ from app.database.models import CameraModel, ObjectModel
 from app.database.repository import Repository
 from app.services.camera_checker import CameraChecker, CheckResult
 from app.services.ffplay_service import FFPlayService
+from app.services.git_service import GitPullService
 from app.services.import_service import ImportService
 from app.services.template_service import TemplateService
+from app.ui.constants import (
+    CHECK_TIMER_MIN_INTERVAL_SEC,
+    ERROR_PANE_QSS,
+    FFPLAY_FOCUS_DELAY_MS,
+    GIT_PULL_DIALOG_LIMIT,
+    GIT_PULL_LOG_LIMIT,
+    LOG_PANE_MAX_HEIGHT,
+    LOG_SPLITTER_DEFAULT_SIZES,
+    LOGO_HEIGHT_PX,
+    REFRESH_DEBOUNCE_MS,
+    RIGHT_PANE_DEFAULT_WIDTH,
+    SIDEBAR_DEFAULT_WIDTH,
+    SIDEBAR_MIN_WIDTH,
+    STATUS_BAR_MESSAGE_MS,
+    STATUSBAR_PADDING_PX,
+    WINDOW_DEFAULT_SIZE,
+)
 from app.ui.dialogs.camera_dialog import CameraDialog
 from app.ui.dialogs.import_dialog import ImportDialog
 from app.ui.dialogs.object_dialog import ObjectDialog
 from app.ui.widgets.camera_table import CameraTable
 from app.ui.widgets.object_sidebar import ObjectSidebar
+from app.utils.validators import mask_rtsp_url
 
 
 class MainWindow(QMainWindow):
@@ -43,15 +65,16 @@ class MainWindow(QMainWindow):
         self.checker = CameraChecker()
         self.import_service = ImportService(self.repo)
         self.template_service = TemplateService()
+        self._git_service: Optional[GitPullService] = None
 
-        self.current_object_id: int | None = None
+        self.current_object_id: Optional[int] = None
         self.objects_cache: list[ObjectModel] = []
         self.cameras_cache: list[CameraModel] = []
         self._sort_column = 0
         self._sort_order = Qt.SortOrder.AscendingOrder
 
         self.setWindowTitle(f"{config.APP_NAME} {config.APP_VERSION}")
-        self.resize(1450, 880)
+        self.resize(*WINDOW_DEFAULT_SIZE)
 
         self._setup_ui()
         self._bind_signals()
@@ -59,65 +82,52 @@ class MainWindow(QMainWindow):
         self._refresh_cameras()
 
         self.timer = QTimer(self)
-        self.timer.setInterval(max(15, config.CHECK_INTERVAL_SEC) * 1000)
+        self.timer.setInterval(
+            max(CHECK_TIMER_MIN_INTERVAL_SEC, config.CHECK_INTERVAL_SEC) * 1000
+        )
         self.timer.timeout.connect(self._auto_check_all_enabled)
         self.timer.start()
 
         self._refresh_debounce = QTimer(self)
         self._refresh_debounce.setSingleShot(True)
-        self._refresh_debounce.setInterval(250)
+        self._refresh_debounce.setInterval(REFRESH_DEBOUNCE_MS)
         self._refresh_debounce.timeout.connect(self._refresh_views_after_checks)
 
         self._setup_shortcuts()
 
-    def _setup_shortcuts(self) -> None:
-        for seq in ("Ctrl+Return", "Ctrl+Enter"):
-            sc = QShortcut(QKeySequence(seq), self)
-            sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
-            sc.activated.connect(self._open_selected_camera)
-        sc_r = QShortcut(QKeySequence("Ctrl+R"), self)
-        sc_r.setContext(Qt.ShortcutContext.ApplicationShortcut)
-        sc_r.activated.connect(self._manual_check_all)
-
-    def _open_selected_camera(self) -> None:
-        cam_id = self.table.selected_camera_id()
-        if cam_id is None:
-            self._log("Открыть камеру: не выбрана строка в таблице")
-            return
-        self._open_camera_stream(cam_id)
+    # ==================================================================
+    # UI assembly
+    # ==================================================================
 
     def _setup_ui(self) -> None:
+        self._build_toolbar()
+        self.setCentralWidget(self._build_central_splitter())
+        self.setStatusBar(QStatusBar())
+        self._setup_logo()
+
+    def _build_toolbar(self) -> None:
         toolbar = QToolBar("Main")
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
 
-        add_object_btn = QPushButton("Добавить объект")
-        add_object_btn.clicked.connect(self._add_object)
-        self.add_object_btn = add_object_btn
-        toolbar.addWidget(add_object_btn)
-
-        add_camera_btn = QPushButton("Добавить камеру")
-        add_camera_btn.clicked.connect(self._add_camera)
-        self.add_camera_btn = add_camera_btn
-        toolbar.addWidget(add_camera_btn)
-
-        import_btn = QPushButton("Импорт формы")
-        import_btn.setToolTip("Загрузить .xls / .xlsx и сопоставить колонки")
-        import_btn.clicked.connect(self._open_import_dialog)
-        self.import_btn = import_btn
-        toolbar.addWidget(import_btn)
-
-        check_all_btn = QPushButton("Проверить все (⌘R)")
-        check_all_btn.setToolTip("Проверить все камеры всех объектов (⌘R)")
-        check_all_btn.clicked.connect(self._manual_check_all)
-        self.check_all_btn = check_all_btn
-        toolbar.addWidget(check_all_btn)
-
-        git_btn = QPushButton("Обновить из GitHub")
-        git_btn.setToolTip("git pull --ff-only origin main")
-        git_btn.clicked.connect(self._git_pull_from_github)
-        self.git_btn = git_btn
-        toolbar.addWidget(git_btn)
+        self.add_object_btn = self._add_toolbar_button(
+            toolbar, "Добавить объект", self._add_object
+        )
+        self.add_camera_btn = self._add_toolbar_button(
+            toolbar, "Добавить камеру", self._add_camera
+        )
+        self.import_btn = self._add_toolbar_button(
+            toolbar, "Импорт формы", self._open_import_dialog,
+            tooltip="Загрузить .xls / .xlsx и сопоставить колонки",
+        )
+        self.check_all_btn = self._add_toolbar_button(
+            toolbar, "Проверить все (⌘R)", self._manual_check_all,
+            tooltip="Проверить все камеры всех объектов (⌘R)",
+        )
+        self.git_btn = self._add_toolbar_button(
+            toolbar, "Обновить из GitHub", self._git_pull_from_github,
+            tooltip="git pull --ff-only origin main",
+        )
 
         toolbar.addSeparator()
 
@@ -132,61 +142,74 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(QLabel("Статус:"))
         toolbar.addWidget(self.status_filter)
 
+    @staticmethod
+    def _add_toolbar_button(
+        toolbar: QToolBar,
+        label: str,
+        slot: Callable[[], None],
+        *,
+        tooltip: str = "",
+    ) -> QPushButton:
+        btn = QPushButton(label)
+        if tooltip:
+            btn.setToolTip(tooltip)
+        btn.clicked.connect(slot)
+        toolbar.addWidget(btn)
+        return btn
+
+    def _build_central_splitter(self) -> QSplitter:
         splitter = QSplitter()
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.addWidget(QLabel("Объекты"))
-        self.sidebar = ObjectSidebar()
-        self.sidebar.setMinimumWidth(220)
-        left_layout.addWidget(self.sidebar)
-
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.addWidget(QLabel("Камеры"))
-        self.table = CameraTable()
-        right_layout.addWidget(self.table)
-
-        log_splitter = QSplitter(Qt.Orientation.Horizontal)
-
-        log_left = QWidget()
-        log_left_layout = QVBoxLayout(log_left)
-        log_left_layout.setContentsMargins(0, 0, 0, 0)
-        log_left_layout.addWidget(QLabel("Лог"))
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        log_left_layout.addWidget(self.log_text)
-
-        log_right = QWidget()
-        log_right_layout = QVBoxLayout(log_right)
-        log_right_layout.setContentsMargins(0, 0, 0, 0)
-        log_right_layout.addWidget(QLabel("Ошибки (с временем)"))
-        self.error_text = QTextEdit()
-        self.error_text.setReadOnly(True)
-        self.error_text.setStyleSheet(
-            "QTextEdit { background-color: #2a1414; color: #ff8b8b; }"
-        )
-        log_right_layout.addWidget(self.error_text)
-
-        log_splitter.addWidget(log_left)
-        log_splitter.addWidget(log_right)
-        log_splitter.setStretchFactor(0, 1)
-        log_splitter.setStretchFactor(1, 1)
-        log_splitter.setSizes([600, 600])
-        log_splitter.setMaximumHeight(220)
-
-        right_layout.addWidget(log_splitter)
-
-        splitter.addWidget(left)
-        splitter.addWidget(right)
+        splitter.addWidget(self._build_objects_pane())
+        splitter.addWidget(self._build_cameras_pane())
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([260, 1190])
+        splitter.setSizes([SIDEBAR_DEFAULT_WIDTH, RIGHT_PANE_DEFAULT_WIDTH])
         splitter.setCollapsible(0, False)
         splitter.setCollapsible(1, False)
-        self.setCentralWidget(splitter)
+        return splitter
 
-        self.setStatusBar(QStatusBar())
-        self._setup_logo()
+    def _build_objects_pane(self) -> QWidget:
+        wrapper = QWidget()
+        layout = QVBoxLayout(wrapper)
+        layout.addWidget(QLabel("Объекты"))
+        self.sidebar = ObjectSidebar()
+        self.sidebar.setMinimumWidth(SIDEBAR_MIN_WIDTH)
+        layout.addWidget(self.sidebar)
+        return wrapper
+
+    def _build_cameras_pane(self) -> QWidget:
+        wrapper = QWidget()
+        layout = QVBoxLayout(wrapper)
+        layout.addWidget(QLabel("Камеры"))
+        self.table = CameraTable()
+        layout.addWidget(self.table)
+        layout.addWidget(self._build_log_pane())
+        return wrapper
+
+    def _build_log_pane(self) -> QSplitter:
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(self._build_log_panel("Лог", error=False))
+        splitter.addWidget(self._build_log_panel("Ошибки (с временем)", error=True))
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes(list(LOG_SPLITTER_DEFAULT_SIZES))
+        splitter.setMaximumHeight(LOG_PANE_MAX_HEIGHT)
+        return splitter
+
+    def _build_log_panel(self, title: str, *, error: bool) -> QWidget:
+        wrapper = QWidget()
+        layout = QVBoxLayout(wrapper)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(QLabel(title))
+        text_edit = QTextEdit()
+        text_edit.setReadOnly(True)
+        if error:
+            text_edit.setStyleSheet(ERROR_PANE_QSS)
+            self.error_text = text_edit
+        else:
+            self.log_text = text_edit
+        layout.addWidget(text_edit)
+        return wrapper
 
     def _setup_logo(self) -> None:
         if not config.LOGO_PATH.exists():
@@ -194,16 +217,28 @@ class MainWindow(QMainWindow):
         pix = QPixmap(str(config.LOGO_PATH))
         if pix.isNull():
             return
-        target_h = 84  # ~3× от прежних 28 px
-        pix = pix.scaledToHeight(target_h, Qt.TransformationMode.SmoothTransformation)
+        pix = pix.scaledToHeight(LOGO_HEIGHT_PX, Qt.TransformationMode.SmoothTransformation)
         self.logo_label = QLabel()
         self.logo_label.setPixmap(pix)
         self.logo_label.setToolTip("УРУС")
         self.logo_label.setContentsMargins(8, 0, 8, 0)
-        self.logo_label.setFixedHeight(target_h)
+        self.logo_label.setFixedHeight(LOGO_HEIGHT_PX)
         self.statusBar().setSizeGripEnabled(False)
-        self.statusBar().setFixedHeight(target_h + 8)
+        self.statusBar().setFixedHeight(LOGO_HEIGHT_PX + STATUSBAR_PADDING_PX)
         self.statusBar().addPermanentWidget(self.logo_label)
+
+    # ==================================================================
+    # signals / shortcuts
+    # ==================================================================
+
+    def _setup_shortcuts(self) -> None:
+        for seq in ("Ctrl+Return", "Ctrl+Enter"):
+            sc = QShortcut(QKeySequence(seq), self)
+            sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
+            sc.activated.connect(self._open_selected_camera)
+        sc_r = QShortcut(QKeySequence("Ctrl+R"), self)
+        sc_r.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        sc_r.activated.connect(self._manual_check_all)
 
     def _bind_signals(self) -> None:
         self.sidebar.object_selected.connect(self._on_object_selected)
@@ -221,15 +256,21 @@ class MainWindow(QMainWindow):
         self.table.bulk_edit_requested.connect(self._bulk_edit)
         self.checker.camera_checked.connect(self._on_camera_checked)
 
+    # ==================================================================
+    # logging helpers
+    # ==================================================================
+
     def _log(self, message: str) -> None:
         self.log_text.append(message)
-        self.statusBar().showMessage(message, 5000)
+        self.statusBar().showMessage(message, STATUS_BAR_MESSAGE_MS)
 
     def _log_error(self, message: str) -> None:
-        from datetime import datetime
-
         ts = datetime.now().strftime("%H:%M:%S")
         self.error_text.append(f"[{ts}] {message}")
+
+    # ==================================================================
+    # data refresh
+    # ==================================================================
 
     def _refresh_objects(self) -> None:
         current_id = self.sidebar.current_object_id()
@@ -242,16 +283,21 @@ class MainWindow(QMainWindow):
             self.current_object_id = objects[0].id
 
     def _refresh_cameras(self) -> None:
-        status_filter = self.status_filter.currentText()
-        search = self.search_input.text()
         cameras = self.repo.list_cameras(
             object_id=self.current_object_id,
-            search=search,
-            status_filter=status_filter,
+            search=self.search_input.text(),
+            status_filter=self.status_filter.currentText(),
         )
-        cameras = self._apply_sort(cameras)
-        self.cameras_cache = cameras
-        self.table.populate(cameras)
+        self.cameras_cache = self._apply_sort(cameras)
+        self.table.populate(self.cameras_cache)
+
+    def _refresh_views_after_checks(self) -> None:
+        self._refresh_objects()
+        self._refresh_cameras()
+
+    # ==================================================================
+    # sorting
+    # ==================================================================
 
     def _apply_sort(self, cameras: list[CameraModel]) -> list[CameraModel]:
         col = self._sort_column
@@ -296,11 +342,15 @@ class MainWindow(QMainWindow):
         self._sort_order = order
         self._refresh_cameras()
 
+    # ==================================================================
+    # objects: select / add / rename / delete
+    # ==================================================================
+
     def _on_object_selected(self, object_id: int) -> None:
         self.current_object_id = object_id
         self._refresh_cameras()
 
-    def _selected_object(self) -> ObjectModel | None:
+    def _selected_object(self) -> Optional[ObjectModel]:
         for obj in self.objects_cache:
             if obj.id == self.current_object_id:
                 return obj
@@ -308,92 +358,23 @@ class MainWindow(QMainWindow):
 
     def _add_object(self) -> None:
         dlg = ObjectDialog(self)
-        if dlg.exec():
-            try:
-                self.repo.add_object(dlg.name)
-            except Exception as exc:
-                QMessageBox.critical(self, "Ошибка", f"Не удалось создать объект:\n{exc}")
-                return
-            self._refresh_objects()
-            self._log(f"Создан объект: {dlg.name}")
-
-    def _add_camera(self) -> None:
-        if not self.objects_cache:
-            QMessageBox.information(self, "Камера", "Сначала добавьте хотя бы один объект")
+        if not dlg.exec():
             return
-        dlg = CameraDialog(self.objects_cache, parent=self)
-        if dlg.exec():
-            d = dlg.form_data()
-            try:
-                self.repo.add_camera(
-                    object_id=d.object_id,
-                    camera_identifier=d.camera_identifier,
-                    camera_name=d.camera_name,
-                    group_name=d.group_name,
-                    gps_coords=d.gps_coords,
-                    uin=d.uin,
-                    rtsp_url=d.rtsp_url,
-                    enabled=d.enabled,
-                )
-            except Exception as exc:
-                QMessageBox.critical(self, "Ошибка", f"Не удалось добавить камеру:\n{exc}")
-                return
-            self._refresh_objects()
-            self._refresh_cameras()
-            self._log(f"Добавлена камера: {d.camera_name}")
-
-    def _edit_camera(self, camera_id: int) -> None:
-        cam = self.repo.get_camera(camera_id)
-        if not cam:
+        try:
+            self.repo.add_object(dlg.name)
+        except Exception as exc:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось создать объект:\n{exc}")
             return
-        dlg = CameraDialog(self.objects_cache, parent=self, camera=cam)
-        if dlg.exec():
-            d = dlg.form_data()
-            try:
-                self.repo.update_camera(
-                    camera_id=cam.id,
-                    object_id=d.object_id,
-                    camera_identifier=d.camera_identifier,
-                    camera_name=d.camera_name,
-                    group_name=d.group_name,
-                    gps_coords=d.gps_coords,
-                    uin=d.uin,
-                    rtsp_url=d.rtsp_url,
-                    enabled=d.enabled,
-                )
-            except Exception as exc:
-                QMessageBox.critical(self, "Ошибка", f"Не удалось обновить камеру:\n{exc}")
-                return
-            self._refresh_objects()
-            self._refresh_cameras()
-            self._log(f"Обновлена камера: {d.camera_name}")
-
-    def _delete_camera(self, camera_id: int) -> None:
-        cam = self.repo.get_camera(camera_id)
-        if not cam:
-            return
-        resp = QMessageBox.question(
-            self,
-            "Удаление",
-            f"Удалить камеру «{cam.camera_name}»?",
-        )
-        if resp != QMessageBox.StandardButton.Yes:
-            return
-        self.repo.delete_camera(camera_id)
         self._refresh_objects()
-        self._refresh_cameras()
-        self._log(f"Удалена камера: {cam.camera_name}")
+        self._log(f"Создан объект: {dlg.name}")
 
     def _rename_object(self, object_id: int) -> None:
         obj = next((o for o in self.objects_cache if o.id == object_id), None)
         if not obj:
             return
         new_name, ok = QInputDialog.getText(
-            self,
-            "Переименовать объект",
-            "Новое название объекта:",
-            QLineEdit.EchoMode.Normal,
-            obj.name,
+            self, "Переименовать объект", "Новое название объекта:",
+            QLineEdit.EchoMode.Normal, obj.name,
         )
         if not ok:
             return
@@ -404,13 +385,13 @@ class MainWindow(QMainWindow):
         if new_name == obj.name:
             return
         clash = next(
-            (o for o in self.objects_cache if o.id != object_id and o.name.lower() == new_name.lower()),
+            (o for o in self.objects_cache
+             if o.id != object_id and o.name.lower() == new_name.lower()),
             None,
         )
         if clash:
             QMessageBox.warning(
-                self,
-                "Переименование",
+                self, "Переименование",
                 f"Объект с названием «{new_name}» уже существует.",
             )
             return
@@ -428,8 +409,7 @@ class MainWindow(QMainWindow):
         if not obj:
             return
         resp = QMessageBox.question(
-            self,
-            "Удаление",
+            self, "Удаление",
             f"Удалить объект «{obj.name}» и все его камеры ({obj.camera_count})?",
         )
         if resp != QMessageBox.StandardButton.Yes:
@@ -441,6 +421,81 @@ class MainWindow(QMainWindow):
         self._refresh_cameras()
         self._log(f"Удален объект: {obj.name}")
 
+    # ==================================================================
+    # cameras: add / edit / delete
+    # ==================================================================
+
+    def _add_camera(self) -> None:
+        if not self.objects_cache:
+            QMessageBox.information(self, "Камера", "Сначала добавьте хотя бы один объект")
+            return
+        dlg = CameraDialog(self.objects_cache, parent=self)
+        if not dlg.exec():
+            return
+        d = dlg.form_data()
+        try:
+            self.repo.add_camera(
+                object_id=d.object_id,
+                camera_identifier=d.camera_identifier,
+                camera_name=d.camera_name,
+                group_name=d.group_name,
+                gps_coords=d.gps_coords,
+                uin=d.uin,
+                rtsp_url=d.rtsp_url,
+                enabled=d.enabled,
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось добавить камеру:\n{exc}")
+            return
+        self._refresh_objects()
+        self._refresh_cameras()
+        self._log(f"Добавлена камера: {d.camera_name}")
+
+    def _edit_camera(self, camera_id: int) -> None:
+        cam = self.repo.get_camera(camera_id)
+        if not cam:
+            return
+        dlg = CameraDialog(self.objects_cache, parent=self, camera=cam)
+        if not dlg.exec():
+            return
+        d = dlg.form_data()
+        try:
+            self.repo.update_camera(
+                camera_id=cam.id,
+                object_id=d.object_id,
+                camera_identifier=d.camera_identifier,
+                camera_name=d.camera_name,
+                group_name=d.group_name,
+                gps_coords=d.gps_coords,
+                uin=d.uin,
+                rtsp_url=d.rtsp_url,
+                enabled=d.enabled,
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось обновить камеру:\n{exc}")
+            return
+        self._refresh_objects()
+        self._refresh_cameras()
+        self._log(f"Обновлена камера: {d.camera_name}")
+
+    def _delete_camera(self, camera_id: int) -> None:
+        cam = self.repo.get_camera(camera_id)
+        if not cam:
+            return
+        resp = QMessageBox.question(
+            self, "Удаление", f"Удалить камеру «{cam.camera_name}»?",
+        )
+        if resp != QMessageBox.StandardButton.Yes:
+            return
+        self.repo.delete_camera(camera_id)
+        self._refresh_objects()
+        self._refresh_cameras()
+        self._log(f"Удалена камера: {cam.camera_name}")
+
+    # ==================================================================
+    # cameras: bulk operations
+    # ==================================================================
+
     def _bulk_check(self, camera_ids: list[int]) -> None:
         cams = [c for c in (self.repo.get_camera(cid) for cid in camera_ids) if c]
         self.checker.check_many(cams)
@@ -450,9 +505,7 @@ class MainWindow(QMainWindow):
         if not camera_ids:
             return
         resp = QMessageBox.question(
-            self,
-            "Удаление",
-            f"Удалить выделенные камеры ({len(camera_ids)})?",
+            self, "Удаление", f"Удалить выделенные камеры ({len(camera_ids)})?",
         )
         if resp != QMessageBox.StandardButton.Yes:
             return
@@ -465,65 +518,79 @@ class MainWindow(QMainWindow):
         self._refresh_cameras()
         self._log(f"Удалено камер: {removed}")
 
+    # Простые текстовые поля: общий обработчик через QInputDialog.
+    _BULK_TEXT_FIELDS: dict[str, tuple[str, str]] = {
+        "group_name": ("Тип (группа)", "Новый тип/группа для выделенных камер:"),
+        "gps_coords": ("Координаты (GPS)", "Новые координаты для выделенных камер (пусто = очистить):"),
+        "uin": ("УИН", "Новый УИН для выделенных камер (пусто = очистить):"),
+    }
+
     def _bulk_edit(self, camera_ids: list[int], field: str) -> None:
         if not camera_ids:
             return
-
-        labels = {
-            "group_name": ("Тип (группа)", "Новый тип/группа для выделенных камер:"),
-            "gps_coords": ("Координаты (GPS)", "Новые координаты для выделенных камер (пусто = очистить):"),
-            "uin": ("УИН", "Новый УИН для выделенных камер (пусто = очистить):"),
-        }
-
         try:
-            if field in labels:
-                title, prompt = labels[field]
-                value, ok = QInputDialog.getText(
-                    self,
-                    f"Массовое изменение: {title}",
-                    f"{prompt}\nЗатронет камер: {len(camera_ids)}",
-                    QLineEdit.EchoMode.Normal,
-                    "",
-                )
-                if not ok:
-                    return
-                affected = self.repo.bulk_update_field(camera_ids, field, value.strip())
-                self._log(f"Массово обновлено «{title}» у {affected} камер")
-
+            if field in self._BULK_TEXT_FIELDS:
+                self._bulk_edit_text_field(camera_ids, field)
             elif field == "object_id":
-                if not self.objects_cache:
-                    QMessageBox.information(self, "Перенос", "Нет доступных объектов")
-                    return
-                names = [o.name for o in self.objects_cache]
-                name, ok = QInputDialog.getItem(
-                    self,
-                    "Перенести в объект",
-                    f"Выберите объект для {len(camera_ids)} камер:",
-                    names,
-                    0,
-                    False,
-                )
-                if not ok:
-                    return
-                target = next((o for o in self.objects_cache if o.name == name), None)
-                if not target:
-                    return
-                affected = self.repo.bulk_update_field(camera_ids, "object_id", target.id)
-                self._log(f"Перенесено камер в «{target.name}»: {affected}")
-
+                self._bulk_edit_move_to_object(camera_ids)
             elif field in ("enable", "disable"):
-                value = 1 if field == "enable" else 0
-                affected = self.repo.bulk_update_field(camera_ids, "enabled", value)
-                state = "включено" if value else "выключено"
-                self._log(f"Массово {state} камер: {affected}")
+                self._bulk_edit_enabled(camera_ids, enable=(field == "enable"))
             else:
                 return
         except Exception as exc:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось применить массовое изменение:\n{exc}")
+            QMessageBox.critical(
+                self, "Ошибка", f"Не удалось применить массовое изменение:\n{exc}",
+            )
             return
 
         self._refresh_objects()
         self._refresh_cameras()
+
+    def _bulk_edit_text_field(self, camera_ids: list[int], field: str) -> None:
+        title, prompt = self._BULK_TEXT_FIELDS[field]
+        value, ok = QInputDialog.getText(
+            self, f"Массовое изменение: {title}",
+            f"{prompt}\nЗатронет камер: {len(camera_ids)}",
+            QLineEdit.EchoMode.Normal, "",
+        )
+        if not ok:
+            return
+        affected = self.repo.bulk_update_field(camera_ids, field, value.strip())
+        self._log(f"Массово обновлено «{title}» у {affected} камер")
+
+    def _bulk_edit_move_to_object(self, camera_ids: list[int]) -> None:
+        if not self.objects_cache:
+            QMessageBox.information(self, "Перенос", "Нет доступных объектов")
+            return
+        names = [o.name for o in self.objects_cache]
+        name, ok = QInputDialog.getItem(
+            self, "Перенести в объект",
+            f"Выберите объект для {len(camera_ids)} камер:",
+            names, 0, False,
+        )
+        if not ok:
+            return
+        target = next((o for o in self.objects_cache if o.name == name), None)
+        if not target:
+            return
+        affected = self.repo.bulk_update_field(camera_ids, "object_id", target.id)
+        self._log(f"Перенесено камер в «{target.name}»: {affected}")
+
+    def _bulk_edit_enabled(self, camera_ids: list[int], *, enable: bool) -> None:
+        affected = self.repo.bulk_update_field(camera_ids, "enabled", 1 if enable else 0)
+        state = "включено" if enable else "выключено"
+        self._log(f"Массово {state} камер: {affected}")
+
+    # ==================================================================
+    # ffplay
+    # ==================================================================
+
+    def _open_selected_camera(self) -> None:
+        cam_id = self.table.selected_camera_id()
+        if cam_id is None:
+            self._log("Открыть камеру: не выбрана строка в таблице")
+            return
+        self._open_camera_stream(cam_id)
 
     def _open_camera_stream(self, camera_id: int) -> None:
         cam = self.repo.get_camera(camera_id)
@@ -538,7 +605,7 @@ class MainWindow(QMainWindow):
         self._log(f"Открыт поток: {cam.camera_name}")
         self.lower()
         self.clearFocus()
-        QTimer.singleShot(300, self._activate_ffplay_window)
+        QTimer.singleShot(FFPLAY_FOCUS_DELAY_MS, self._activate_ffplay_window)
 
     def _activate_ffplay_window(self) -> None:
         osa = shutil.which("osascript")
@@ -547,15 +614,19 @@ class MainWindow(QMainWindow):
         try:
             subprocess.Popen(
                 [
-                    osa,
-                    "-e",
-                    'tell application "System Events" to set frontmost of (first process whose name is "ffplay") to true',
+                    osa, "-e",
+                    'tell application "System Events" to set frontmost of '
+                    '(first process whose name is "ffplay") to true',
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
         except Exception:
             pass
+
+    # ==================================================================
+    # checker
+    # ==================================================================
 
     def _check_single_camera(self, camera_id: int) -> None:
         cam = self.repo.get_camera(camera_id)
@@ -565,24 +636,16 @@ class MainWindow(QMainWindow):
         self._log(f"Проверка камеры: {cam.camera_name}")
 
     def _manual_check_all(self) -> None:
-        cameras = self.repo.list_cameras(object_id=None, search="", status_filter="all")
-        enabled = [c for c in cameras if c.enabled]
-        self.checker.check_many(enabled)
-        self._log(f"Запущена ручная проверка всех объектов: {len(enabled)} камер")
+        self._run_check_all_enabled("Запущена ручная проверка всех объектов")
 
     def _auto_check_all_enabled(self) -> None:
+        self._run_check_all_enabled("Автопроверка")
+
+    def _run_check_all_enabled(self, log_prefix: str) -> None:
         cameras = self.repo.list_cameras(object_id=None, search="", status_filter="all")
         enabled = [c for c in cameras if c.enabled]
         self.checker.check_many(enabled)
-        self._log(f"Автопроверка: {len(enabled)} камер")
-
-    def _on_coords_copied(self, coords: str) -> None:
-        self._log(f"Координаты скопированы: {coords}")
-
-    def _on_rtsp_copied(self, url: str) -> None:
-        from app.utils.validators import mask_rtsp_url
-
-        self._log(f"RTSP-ссылка скопирована: {mask_rtsp_url(url)}")
+        self._log(f"{log_prefix}: {len(enabled)} камер")
 
     def _on_camera_checked(self, result: CheckResult) -> None:
         self.repo.update_camera_status(
@@ -598,12 +661,7 @@ class MainWindow(QMainWindow):
         cam_label = (
             f"{cam.object_name} / {cam.camera_name}" if cam else f"camera_id={result.camera_id}"
         )
-        if result.ping_ok is None:
-            ping_part = ""
-        elif result.ping_ok:
-            ping_part = f" [ping {result.ping_ms} ms]" if result.ping_ms is not None else " [ping OK]"
-        else:
-            ping_part = " [ping ✕]"
+        ping_part = self._format_ping_part(result.ping_ok, result.ping_ms)
         self._log(
             f"Проверка завершена camera_id={result.camera_id}: {result.status}"
             + (f" ({result.error})" if result.error else "")
@@ -615,20 +673,38 @@ class MainWindow(QMainWindow):
         if not self._refresh_debounce.isActive():
             self._refresh_debounce.start()
 
-    def _refresh_views_after_checks(self) -> None:
-        self._refresh_objects()
-        self._refresh_cameras()
+    @staticmethod
+    def _format_ping_part(ping_ok: Optional[bool], ping_ms: Optional[int]) -> str:
+        if ping_ok is None:
+            return ""
+        if ping_ok:
+            return f" [ping {ping_ms} ms]" if ping_ms is not None else " [ping OK]"
+        return " [ping ✕]"
+
+    # ==================================================================
+    # clipboard callbacks (от таблицы)
+    # ==================================================================
+
+    def _on_coords_copied(self, coords: str) -> None:
+        self._log(f"Координаты скопированы: {coords}")
+
+    def _on_rtsp_copied(self, url: str) -> None:
+        self._log(f"RTSP-ссылка скопирована: {mask_rtsp_url(url)}")
+
+    # ==================================================================
+    # import dialog
+    # ==================================================================
 
     def _open_import_dialog(self) -> None:
-        import traceback
-
         try:
             dlg = ImportDialog(self.import_service, self.template_service, self)
         except Exception as exc:
             tb = traceback.format_exc()
             self._log(f"Ошибка открытия импорта: {exc}")
             self._log_error(f"IMPORT: {exc}")
-            QMessageBox.critical(self, "Импорт", f"Не удалось открыть окно импорта:\n{exc}\n\n{tb}")
+            QMessageBox.critical(
+                self, "Импорт", f"Не удалось открыть окно импорта:\n{exc}\n\n{tb}",
+            )
             return
         dlg.import_completed.connect(self._on_import_completed)
         dlg.exec()
@@ -637,6 +713,10 @@ class MainWindow(QMainWindow):
         self._refresh_objects()
         self._refresh_cameras()
         self._log(f"Импорт завершен. Создано={created}, обновлено={updated}")
+
+    # ==================================================================
+    # close / git
+    # ==================================================================
 
     def closeEvent(self, event) -> None:
         try:
@@ -648,12 +728,9 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _git_pull_from_github(self) -> None:
-        from app.services.git_service import GitPullService
-
         if config.PROJECT_GIT_DIR is None:
             QMessageBox.information(
-                self,
-                "GitHub",
+                self, "GitHub",
                 (
                     "Не найден git-репозиторий проекта на этом Mac.\n\n"
                     "Чтобы кнопка обновляла код, выполните в терминале один раз:\n\n"
@@ -663,7 +740,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        if not hasattr(self, "_git_service"):
+        if self._git_service is None:
             self._git_service = GitPullService(self)
             self._git_service.finished.connect(self._on_git_pull_done)
         self.git_btn.setEnabled(False)
@@ -672,16 +749,16 @@ class MainWindow(QMainWindow):
 
     def _on_git_pull_done(self, ok: bool, message: str) -> None:
         self.git_btn.setEnabled(True)
-        log_message = ("OK: " if ok else "ERROR: ") + message.strip()
+        text = message.strip()
+        log_message = ("OK: " if ok else "ERROR: ") + text
         self._log(log_message)
         if not ok:
-            self._log_error(f"GIT PULL: {message.strip()[:200]}")
-            QMessageBox.warning(self, "GitHub", message.strip() or "Не удалось обновить из GitHub")
-        else:
-            QMessageBox.information(
-                self,
-                "GitHub",
-                "Обновление из GitHub выполнено.\n\n" + message.strip()[:1500] +
-                "\n\nДля применения новых изменений перезапустите приложение.",
-            )
-
+            self._log_error(f"GIT PULL: {text[:GIT_PULL_LOG_LIMIT]}")
+            QMessageBox.warning(self, "GitHub", text or "Не удалось обновить из GitHub")
+            return
+        QMessageBox.information(
+            self, "GitHub",
+            "Обновление из GitHub выполнено.\n\n"
+            + text[:GIT_PULL_DIALOG_LIMIT]
+            + "\n\nДля применения новых изменений перезапустите приложение.",
+        )

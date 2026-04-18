@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
+from enum import Enum
+from typing import Optional
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
@@ -13,199 +15,268 @@ from app.utils.process_utils import ensure_binary_exists, run_command
 from app.utils.validators import is_valid_rtsp_url
 
 
+# --- результаты ------------------------------------------------------------
+
+
 @dataclass
 class CheckResult:
     camera_id: int
     status: str
     checked_at: str
-    error: str | None
-    seen_online_at: str | None
-    ping_ok: bool | None = None
-    ping_ms: int | None = None
+    error: Optional[str]
+    seen_online_at: Optional[str]
+    ping_ok: Optional[bool] = None
+    ping_ms: Optional[int] = None
+
+
+class CheckLevel(Enum):
+    """Три уровня глубины проверки RTSP-потока через ffprobe."""
+
+    NORMAL = "normal"   # online / offline / новая
+    DEEP = "deep"       # уже unknown без deep-кода
+    ULTRA = "ultra"     # unknown + код deep-fail (последняя попытка перед offline)
+
+    @property
+    def timeout_sec(self) -> int:
+        if self is CheckLevel.ULTRA:
+            return max(1, config.CHECK_TIMEOUT_ULTRA_SEC)
+        if self is CheckLevel.DEEP:
+            return max(1, config.CHECK_TIMEOUT_DEEP_SEC)
+        return max(1, config.CHECK_TIMEOUT_SEC)
+
+
+# --- worker ----------------------------------------------------------------
 
 
 class CameraCheckWorker(QRunnable):
-    """Эмитит результат через внешний bound-signal долгоживущего владельца."""
+    """Запускает ping + ffprobe и эмитит CheckResult через долгоживущий сигнал."""
 
     def __init__(self, camera: CameraModel, result_signal):
         super().__init__()
         self.camera = camera
         self._result_signal = result_signal
+        self._ping_result: Optional[tuple[bool, Optional[int]]] = None
         self.setAutoDelete(True)
 
+    # -- public entry point --------------------------------------------------
+
+    def run(self) -> None:
+        checked_at = now_iso()
+        last_seen = self.camera.last_seen_online_at
+
+        self._ping_result = self._run_ping()
+
+        if not self.camera.enabled:
+            self._emit(self._unknown_result(checked_at, last_seen, error="Камера выключена"))
+            return
+
+        url = self.camera.rtsp_url.strip()
+        if not is_valid_rtsp_url(url):
+            self._emit(self._offline_result(checked_at, last_seen, error="Некорректный RTSP URL"))
+            return
+
+        if not ensure_binary_exists(config.FFPROBE_BIN):
+            self._emit(
+                self._offline_result(
+                    checked_at,
+                    last_seen,
+                    error=f"ffprobe не найден: {config.FFPROBE_BIN}",
+                )
+            )
+            return
+
+        level = self._resolve_check_level()
+        self._probe_and_emit(url, level, checked_at, last_seen)
+
+    # -- ping ---------------------------------------------------------------
+
+    def _run_ping(self) -> Optional[tuple[bool, Optional[int]]]:
+        if not config.PING_ENABLED:
+            return None
+        host = host_from_rtsp_url(self.camera.rtsp_url)
+        if not host:
+            return None
+        try:
+            return ping_host(host, config.PING_TIMEOUT_SEC)
+        except Exception:
+            return (False, None)
+
+    # -- ffprobe ------------------------------------------------------------
+
+    def _probe_and_emit(
+        self,
+        url: str,
+        level: CheckLevel,
+        checked_at: str,
+        last_seen: Optional[str],
+    ) -> None:
+        timeout_sec = level.timeout_sec
+
+        # Часть камер (особенно Dahua/Hikvision со стримом cam/realmonitor) отвечает
+        # на TCP медленно или только по UDP. ffplay сам пробует оба транспорта,
+        # ffprobe — нет, поэтому делаем это сами: сначала TCP, потом UDP.
+        for transport in ("tcp", "udp"):
+            outcome = self._probe_once(url, transport, timeout_sec)
+            if outcome.kind == "online":
+                self._emit(
+                    CheckResult(
+                        camera_id=self.camera.id,
+                        status="online",
+                        checked_at=checked_at,
+                        error=None,
+                        seen_online_at=checked_at,
+                    )
+                )
+                return
+            if outcome.kind == "error":
+                # Реальная ошибка от ffprobe (401/404/Connection refused) — UDP
+                # пробовать смысла нет, камера действительно недоступна.
+                self._emit(
+                    self._offline_result(checked_at, last_seen, error=outcome.error[:500])
+                )
+                return
+            if outcome.kind == "exception":
+                self._emit(self._offline_result(checked_at, last_seen, error=outcome.error))
+                return
+            # outcome.kind == "timeout" → пробуем следующий транспорт.
+
+        # Оба транспорта в timeout — это уже наш «unknown»-сценарий.
+        self._emit(self._timeout_result(checked_at, last_seen, level))
+
+    def _probe_once(self, url: str, transport: str, timeout_sec: int) -> "_ProbeOutcome":
+        cmd = self._build_ffprobe_cmd(url, transport, timeout_sec)
+        try:
+            proc = run_command(cmd, timeout_sec=max(2, timeout_sec + 2))
+        except subprocess.TimeoutExpired:
+            return _ProbeOutcome(kind="timeout", error="")
+        except Exception as exc:
+            return _ProbeOutcome(kind="exception", error=str(exc))
+
+        if proc.returncode == 0 and proc.stdout.strip():
+            return _ProbeOutcome(kind="online", error="")
+
+        err = (proc.stderr or proc.stdout or f"Код {proc.returncode}").strip()
+        if _looks_like_timeout(err):
+            return _ProbeOutcome(kind="timeout", error=err)
+        return _ProbeOutcome(kind="error", error=err)
+
+    @staticmethod
+    def _build_ffprobe_cmd(url: str, transport: str, timeout_sec: int) -> list[str]:
+        timeout_us = str(timeout_sec * 1_000_000)
+        # -probesize/-analyzeduration режут «лишнее» ожидание метаданных:
+        # нам достаточно убедиться, что format_name определился.
+        return [
+            config.FFPROBE_BIN,
+            "-v", "error",
+            "-rtsp_transport", transport,
+            "-rw_timeout", timeout_us,
+            "-stimeout", timeout_us,   # для новых ffmpeg вместо -timeout
+            "-timeout", timeout_us,
+            "-probesize", "32",
+            "-analyzeduration", "0",
+            "-show_entries", "format=format_name",
+            "-of", "default=nw=1:nk=1",
+            url,
+        ]
+
+    def _resolve_check_level(self) -> CheckLevel:
+        if self.camera.status != "unknown":
+            return CheckLevel.NORMAL
+        prev_error = (self.camera.last_error or "").strip()
+        deep_code = config.UNKNOWN_DEEP_FAIL_CODE
+        if deep_code and deep_code in prev_error:
+            return CheckLevel.ULTRA
+        return CheckLevel.DEEP
+
+    # -- factories ----------------------------------------------------------
+
+    def _unknown_result(
+        self,
+        checked_at: str,
+        last_seen: Optional[str],
+        error: Optional[str],
+    ) -> CheckResult:
+        return CheckResult(
+            camera_id=self.camera.id,
+            status="unknown",
+            checked_at=checked_at,
+            error=error,
+            seen_online_at=last_seen,
+        )
+
+    def _offline_result(
+        self,
+        checked_at: str,
+        last_seen: Optional[str],
+        error: Optional[str],
+    ) -> CheckResult:
+        return CheckResult(
+            camera_id=self.camera.id,
+            status="offline",
+            checked_at=checked_at,
+            error=error,
+            seen_online_at=last_seen,
+        )
+
+    def _timeout_result(
+        self,
+        checked_at: str,
+        last_seen: Optional[str],
+        level: CheckLevel,
+    ) -> CheckResult:
+        if level is CheckLevel.ULTRA:
+            return self._offline_result(
+                checked_at,
+                last_seen,
+                error=config.UNKNOWN_OFFLINE_FAIL_MESSAGE,
+            )
+        error = config.UNKNOWN_DEEP_FAIL_MESSAGE if level is CheckLevel.DEEP else None
+        return self._unknown_result(checked_at, last_seen, error=error)
+
+    # -- emit ---------------------------------------------------------------
+
     def _emit(self, result: CheckResult) -> None:
-        # Всегда префиксуем offline-ошибку кодом 0x00 (если ещё не префиксована).
-        if result.status == "offline":
-            code = config.OFFLINE_ERROR_CODE
-            text = (result.error or "").strip()
-            if code and not text.startswith(code):
-                result.error = f"{code} {text}".strip()
-        # Вписываем результат ping (если измерили), не ломая статус.
-        if hasattr(self, "_ping_result") and self._ping_result is not None:
-            ok, ms = self._ping_result
-            result.ping_ok = ok
-            result.ping_ms = ms
+        self._stamp_offline_code(result)
+        self._stamp_ping(result)
         try:
             self._result_signal.emit(result)
         except RuntimeError:
             # Владелец сигнала уже уничтожен (приложение закрывается) — молча игнорируем.
             pass
 
-    def run(self) -> None:
-        checked_at = now_iso()
-        last_seen = self.camera.last_seen_online_at
-        self._ping_result: tuple[bool, int | None] | None = None
-
-        # Параллельных тредов не плодим — пинг быстрый, делаем синхронно перед ffprobe.
-        host = host_from_rtsp_url(self.camera.rtsp_url)
-        if host and config.PING_ENABLED:
-            try:
-                self._ping_result = ping_host(host, config.PING_TIMEOUT_SEC)
-            except Exception:
-                self._ping_result = (False, None)
-
-        if not self.camera.enabled:
-            self._emit(
-                CheckResult(
-                    camera_id=self.camera.id,
-                    status="unknown",
-                    checked_at=checked_at,
-                    error="Камера выключена",
-                    seen_online_at=last_seen,
-                )
-            )
+    @staticmethod
+    def _stamp_offline_code(result: CheckResult) -> None:
+        if result.status != "offline":
             return
-
-        url = self.camera.rtsp_url.strip()
-        if not is_valid_rtsp_url(url):
-            self._emit(
-                CheckResult(
-                    camera_id=self.camera.id,
-                    status="offline",
-                    checked_at=checked_at,
-                    error="Некорректный RTSP URL",
-                    seen_online_at=last_seen,
-                )
-            )
+        code = config.OFFLINE_ERROR_CODE
+        if not code:
             return
-
-        if not ensure_binary_exists(config.FFPROBE_BIN):
-            self._emit(
-                CheckResult(
-                    camera_id=self.camera.id,
-                    status="offline",
-                    checked_at=checked_at,
-                    error=f"ffprobe не найден: {config.FFPROBE_BIN}",
-                    seen_online_at=last_seen,
-                )
-            )
+        text = (result.error or "").strip()
+        if text.startswith(code):
             return
+        result.error = f"{code} {text}".strip()
 
-        # Три уровня проверки:
-        #   normal — здоровые/offline камеры: короткий таймаут.
-        #   deep   — статус unknown без кода: даём больше времени, при тайм-ауте пишем UNKNOWN_DEEP_FAIL_CODE.
-        #   ultra  — статус unknown + UNKNOWN_DEEP_FAIL_CODE: длинный таймаут, при тайм-ауте уходим в offline.
-        prev_status = self.camera.status
-        prev_error = (self.camera.last_error or "").strip()
-        # Камера уже однажды получила deep-fail если в last_error содержится её код
-        # (либо «голый» 0x01, либо текст «Буферизация > 2 min (0x01)»).
-        is_ultra = (
-            prev_status == "unknown"
-            and config.UNKNOWN_DEEP_FAIL_CODE
-            and config.UNKNOWN_DEEP_FAIL_CODE in prev_error
-        )
-        is_deep = (not is_ultra) and prev_status == "unknown"
-
-        if is_ultra:
-            timeout_sec = max(1, config.CHECK_TIMEOUT_ULTRA_SEC)
-        elif is_deep:
-            timeout_sec = max(1, config.CHECK_TIMEOUT_DEEP_SEC)
-        else:
-            timeout_sec = max(1, config.CHECK_TIMEOUT_SEC)
-
-        cmd = [
-            config.FFPROBE_BIN,
-            "-v",
-            "error",
-            "-rtsp_transport",
-            "tcp",
-            "-rw_timeout",
-            str(timeout_sec * 1_000_000),
-            "-timeout",
-            str(timeout_sec * 1_000_000),
-            "-show_entries",
-            "format=format_name",
-            "-of",
-            "default=nw=1:nk=1",
-            url,
-        ]
-        try:
-            proc = run_command(cmd, timeout_sec=max(2, timeout_sec + 2))
-        except subprocess.TimeoutExpired:
-            self._emit(self._timeout_result(checked_at, last_seen, is_deep, is_ultra))
+    def _stamp_ping(self, result: CheckResult) -> None:
+        if self._ping_result is None:
             return
-        except Exception as exc:
-            self._emit(
-                CheckResult(
-                    camera_id=self.camera.id,
-                    status="offline",
-                    checked_at=checked_at,
-                    error=str(exc),
-                    seen_online_at=last_seen,
-                )
-            )
-            return
+        ok, ms = self._ping_result
+        result.ping_ok = ok
+        result.ping_ms = ms
 
-        if proc.returncode == 0 and proc.stdout.strip():
-            self._emit(
-                CheckResult(
-                    camera_id=self.camera.id,
-                    status="online",
-                    checked_at=checked_at,
-                    error=None,
-                    seen_online_at=checked_at,
-                )
-            )
-            return
 
-        err = (proc.stderr or proc.stdout or f"Код {proc.returncode}").strip()
-        if "timed out" in err.lower() or "timeout" in err.lower():
-            self._emit(self._timeout_result(checked_at, last_seen, is_deep, is_ultra))
-            return
-        # Любая другая ошибка от ffprobe (отказ соединения, 401, 404, и т. п.) → offline.
-        self._emit(
-            CheckResult(
-                camera_id=self.camera.id,
-                status="offline",
-                checked_at=checked_at,
-                error=err[:500],
-                seen_online_at=last_seen,
-            )
-        )
+def _looks_like_timeout(err: str) -> bool:
+    text = err.lower()
+    return "timed out" in text or "timeout" in text
 
-    def _timeout_result(
-        self,
-        checked_at: str,
-        last_seen: str | None,
-        is_deep: bool,
-        is_ultra: bool,
-    ) -> CheckResult:
-        if is_ultra:
-            # Финальная 2-минутная проверка не достучалась — уводим камеру в offline с понятной ошибкой.
-            return CheckResult(
-                camera_id=self.camera.id,
-                status="offline",
-                checked_at=checked_at,
-                error=config.UNKNOWN_OFFLINE_FAIL_MESSAGE,
-                seen_online_at=last_seen,
-            )
-        return CheckResult(
-            camera_id=self.camera.id,
-            status="unknown",
-            checked_at=checked_at,
-            error=config.UNKNOWN_DEEP_FAIL_MESSAGE if is_deep else None,
-            seen_online_at=last_seen,
-        )
+
+@dataclass
+class _ProbeOutcome:
+    """Внутренний результат одной попытки ffprobe (TCP или UDP)."""
+    kind: str   # "online" | "timeout" | "error" | "exception"
+    error: str
+
+
+# --- pool wrapper ----------------------------------------------------------
 
 
 class CameraChecker(QObject):
