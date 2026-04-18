@@ -75,7 +75,20 @@ def initialize_database(db_path: Path | None = None) -> None:
     with _connect(path) as conn:
         conn.executescript(SCHEMA)
         _ensure_columns(conn)
+        _normalize_error_codes(conn)
         conn.commit()
+
+
+def _normalize_error_codes(conn) -> None:
+    """Перевод старого кода '0x03' в актуальный UNKNOWN_DEEP_FAIL_CODE для unknown-камер."""
+    new_code = config.UNKNOWN_DEEP_FAIL_CODE
+    if new_code == "0x03":
+        return
+    conn.execute(
+        "UPDATE cameras SET last_error = ? "
+        "WHERE status = 'unknown' AND TRIM(IFNULL(last_error, '')) = '0x03'",
+        (new_code,),
+    )
 
 
 @contextmanager

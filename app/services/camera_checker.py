@@ -86,8 +86,8 @@ class CameraCheckWorker(QRunnable):
 
         # Три уровня проверки:
         #   normal — здоровые/offline камеры: короткий таймаут.
-        #   deep   — статус unknown без кода: даём больше времени, при тайм-ауте пишем 0x03.
-        #   ultra  — статус unknown + 0x03: длинный таймаут, при тайм-ауте уходим в offline.
+        #   deep   — статус unknown без кода: даём больше времени, при тайм-ауте пишем UNKNOWN_DEEP_FAIL_CODE.
+        #   ultra  — статус unknown + UNKNOWN_DEEP_FAIL_CODE: длинный таймаут, при тайм-ауте уходим в offline.
         prev_status = self.camera.status
         prev_error = (self.camera.last_error or "").strip()
         is_ultra = prev_status == "unknown" and prev_error == config.UNKNOWN_DEEP_FAIL_CODE
