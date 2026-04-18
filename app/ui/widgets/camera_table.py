@@ -172,16 +172,25 @@ class CameraTable(QTableWidget):
 
         obj_item = QTableWidgetItem(cam.object_name)
         obj_item.setData(Qt.ItemDataRole.UserRole, cam.id)
+        self._set_hover_tooltip(obj_item, cam.object_name)
         self.setItem(row, self.COL_OBJECT, obj_item)
 
-        self.setItem(row, self.COL_UIN, QTableWidgetItem(cam.uin or ""))
+        uin_item = QTableWidgetItem(cam.uin or "")
+        self._set_hover_tooltip(uin_item, cam.uin)
+        self.setItem(row, self.COL_UIN, uin_item)
 
         id_item = QTableWidgetItem(cam.camera_identifier)
         id_item.setData(Qt.ItemDataRole.UserRole, cam.id)
+        self._set_hover_tooltip(id_item, cam.camera_identifier)
         self.setItem(row, self.COL_ID, id_item)
 
-        self.setItem(row, self.COL_NAME, QTableWidgetItem(cam.camera_name))
-        self.setItem(row, self.COL_TYPE, QTableWidgetItem(cam.group_name))
+        name_item = QTableWidgetItem(cam.camera_name)
+        self._set_hover_tooltip(name_item, cam.camera_name)
+        self.setItem(row, self.COL_NAME, name_item)
+
+        type_item = QTableWidgetItem(cam.group_name)
+        self._set_hover_tooltip(type_item, cam.group_name)
+        self.setItem(row, self.COL_TYPE, type_item)
 
         gps_item = QTableWidgetItem(cam.gps_coords or "")
         if cam.gps_coords:
@@ -197,14 +206,26 @@ class CameraTable(QTableWidget):
                 f"Последний online: {iso_to_human(cam.last_seen_online_at)}"
             )
         self.setItem(row, self.COL_STATUS, status_cell)
-        self.setItem(row, self.COL_CHECKED, QTableWidgetItem(iso_to_human(cam.last_checked_at)))
-        self.setItem(row, self.COL_ERR, QTableWidgetItem(cam.last_error or ""))
+
+        checked_item = QTableWidgetItem(iso_to_human(cam.last_checked_at))
+        self._set_hover_tooltip(checked_item, iso_to_human(cam.last_checked_at))
+        self.setItem(row, self.COL_CHECKED, checked_item)
+
+        err_item = QTableWidgetItem(cam.last_error or "")
+        self._set_hover_tooltip(err_item, cam.last_error)
+        self.setItem(row, self.COL_ERR, err_item)
+
         rtsp_item = QTableWidgetItem(mask_rtsp_url(cam.rtsp_url))
         rtsp_item.setData(Qt.ItemDataRole.UserRole, cam.rtsp_url)
         rtsp_item.setToolTip(
-            "ПКМ → действия. Двойной клик откроет поток в ffplay."
+            f"{cam.rtsp_url}\n\nПКМ → копировать / открыть. Двойной клик откроет поток в ffplay."
         )
         self.setItem(row, self.COL_RTSP, rtsp_item)
+
+    def _set_hover_tooltip(self, item: QTableWidgetItem, value: str | None) -> None:
+        text = (value or "").strip()
+        if text:
+            item.setToolTip(f"{text}\n\nПКМ → «Копировать»")
 
     # --- row context menu / actions -----------------------------------
 
@@ -228,6 +249,7 @@ class CameraTable(QTableWidget):
         if not index.isValid():
             return
         row = index.row()
+        column = index.column()
         cam_id = self._row_camera_id(row)
         if cam_id is None:
             return
@@ -240,12 +262,48 @@ class CameraTable(QTableWidget):
             selected_ids = [cam_id]
 
         if len(selected_ids) > 1:
-            self._exec_bulk_menu(pos, selected_ids)
+            self._exec_bulk_menu(pos, selected_ids, column)
         else:
-            self._exec_single_menu(pos, row, cam_id)
+            self._exec_single_menu(pos, row, column, cam_id)
 
-    def _exec_single_menu(self, pos: QPoint, row: int, cam_id: int) -> None:
+    def _cell_text(self, row: int, column: int) -> str:
+        """Текст ячейки (для RTSP/координат — оригинал из UserRole, иначе видимый текст)."""
+        if column == self.COL_RTSP:
+            return self._rtsp_for_row(row)
+        if column == self.COL_GPS:
+            return self._gps_for_row(row)
+        item = self.item(row, column)
+        if not item:
+            return ""
+        return (item.text() or "").strip()
+
+    def _column_label(self, column: int) -> str:
+        if 0 <= column < len(self.COLUMNS):
+            return self.COLUMNS[column]
+        return ""
+
+    def _copy_to_clipboard(self, text: str) -> None:
+        if not text:
+            return
+        QGuiApplication.clipboard().setText(text)
+
+    def _exec_single_menu(self, pos: QPoint, row: int, column: int, cam_id: int) -> None:
         menu = QMenu(self)
+
+        cell_text = self._cell_text(row, column)
+        col_label = self._column_label(column)
+        preview = cell_text if len(cell_text) <= 40 else cell_text[:37] + "…"
+        copy_label = (
+            f"Копировать «{col_label}»: {preview}" if cell_text
+            else f"Копировать «{col_label}» (пусто)"
+        )
+        copy_cell_act = QAction(copy_label, menu)
+        copy_cell_act.setEnabled(bool(cell_text))
+        copy_cell_act.triggered.connect(lambda: self._copy_to_clipboard(cell_text))
+        menu.addAction(copy_cell_act)
+
+        menu.addSeparator()
+
         open_act = QAction("Открыть поток (⌘⏎)", menu)
         open_act.triggered.connect(lambda: self.open_requested.emit(cam_id))
         menu.addAction(open_act)
@@ -272,6 +330,10 @@ class CameraTable(QTableWidget):
         copy_rtsp_act.triggered.connect(lambda: self._copy_rtsp_text(rtsp))
         menu.addAction(copy_rtsp_act)
 
+        copy_row_act = QAction("Копировать всю строку (TSV)", menu)
+        copy_row_act.triggered.connect(lambda: self._copy_rows_tsv([row]))
+        menu.addAction(copy_row_act)
+
         menu.addSeparator()
         delete_act = QAction("Удалить (Backspace)", menu)
         delete_act.triggered.connect(lambda: self.delete_requested.emit(cam_id))
@@ -279,11 +341,52 @@ class CameraTable(QTableWidget):
 
         menu.exec(self.viewport().mapToGlobal(pos))
 
-    def _exec_bulk_menu(self, pos: QPoint, ids: list[int]) -> None:
+    def _selected_rows(self) -> list[int]:
+        rows: list[int] = []
+        seen: set[int] = set()
+        if self.selectionModel():
+            for index in self.selectionModel().selectedRows():
+                r = index.row()
+                if r not in seen:
+                    seen.add(r)
+                    rows.append(r)
+        return rows
+
+    def _copy_column_values(self, rows: list[int], column: int) -> None:
+        values = [self._cell_text(r, column) for r in rows]
+        text = "\n".join(values)
+        if text:
+            QGuiApplication.clipboard().setText(text)
+
+    def _copy_rows_tsv(self, rows: list[int]) -> None:
+        visible_cols = [c for c in range(self.columnCount()) if not self.isColumnHidden(c)]
+        lines = []
+        header = "\t".join(self._column_label(c) for c in visible_cols)
+        lines.append(header)
+        for r in rows:
+            cells = [self._cell_text(r, c) for c in visible_cols]
+            lines.append("\t".join(cells))
+        text = "\n".join(lines)
+        if text:
+            QGuiApplication.clipboard().setText(text)
+
+    def _exec_bulk_menu(self, pos: QPoint, ids: list[int], column: int) -> None:
         menu = QMenu(self)
         title = QAction(f"Выделено камер: {len(ids)}", menu)
         title.setEnabled(False)
         menu.addAction(title)
+        menu.addSeparator()
+
+        rows = self._selected_rows()
+        col_label = self._column_label(column)
+        copy_col_act = QAction(f"Копировать столбец «{col_label}» ({len(rows)})", menu)
+        copy_col_act.triggered.connect(lambda: self._copy_column_values(rows, column))
+        menu.addAction(copy_col_act)
+
+        copy_rows_act = QAction(f"Копировать выделенные строки (TSV, {len(rows)})", menu)
+        copy_rows_act.triggered.connect(lambda: self._copy_rows_tsv(rows))
+        menu.addAction(copy_rows_act)
+
         menu.addSeparator()
 
         check_act = QAction("Проверить выделенные", menu)
