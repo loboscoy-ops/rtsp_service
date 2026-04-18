@@ -137,6 +137,7 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left)
         left_layout.addWidget(QLabel("Объекты"))
         self.sidebar = ObjectSidebar()
+        self.sidebar.setMinimumWidth(220)
         left_layout.addWidget(self.sidebar)
 
         right = QWidget()
@@ -177,8 +178,11 @@ class MainWindow(QMainWindow):
 
         splitter.addWidget(left)
         splitter.addWidget(right)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 4)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([260, 1190])
+        splitter.setCollapsible(0, False)
+        splitter.setCollapsible(1, False)
         self.setCentralWidget(splitter)
 
         self.setStatusBar(QStatusBar())
@@ -272,9 +276,10 @@ class MainWindow(QMainWindow):
                 return status_rank.get(cam.status, 9)
             if col == T.COL_PING:
                 if cam.last_ping_ok is None:
-                    return (2, 0)
+                    return (3, 0)
                 if not cam.last_ping_ok:
-                    return (1, 0)
+                    # ICMP-блок (RTSP online) сортируем выше «реально мёртвых».
+                    return (1 if cam.status == "online" else 2, 0)
                 return (0, cam.last_ping_ms if cam.last_ping_ms is not None else 0)
             if col == T.COL_CHECKED:
                 return cam.last_checked_at or ""

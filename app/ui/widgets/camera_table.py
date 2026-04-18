@@ -236,9 +236,18 @@ class CameraTable(QTableWidget):
                 tooltip = "Хост отвечает на ICMP"
             color = QColor("#3ecf8e")
         else:
-            text = "нет ответа"
-            tooltip = "Хост не отвечает на ICMP — возможно, сеть до камеры лежит"
-            color = QColor("#ff8b8b")
+            # Если RTSP при этом online — значит ICMP режется файрволом, не «сеть лежит».
+            if cam.status == "online":
+                text = "ICMP блок."
+                tooltip = (
+                    "RTSP отвечает (online), а ICMP пакеты не доходят.\n"
+                    "Скорее всего, файрвол на камере или маршрутизаторе режет ping."
+                )
+                color = QColor("#d4a017")
+            else:
+                text = "нет ответа"
+                tooltip = "Хост не отвечает на ICMP — возможно, сеть до камеры лежит"
+                color = QColor("#ff8b8b")
 
         item = QTableWidgetItem(text)
         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
