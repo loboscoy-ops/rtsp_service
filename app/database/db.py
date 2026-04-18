@@ -80,14 +80,17 @@ def initialize_database(db_path: Path | None = None) -> None:
 
 
 def _normalize_error_codes(conn) -> None:
-    """Перевод старого кода '0x03' в актуальный UNKNOWN_DEEP_FAIL_CODE для unknown-камер."""
-    new_code = config.UNKNOWN_DEEP_FAIL_CODE
-    if new_code == "0x03":
+    """Переводим старые «голые» коды deep-проверки в новый текстовый формат."""
+    msg = config.UNKNOWN_DEEP_FAIL_MESSAGE
+    legacy_codes = {"0x03", "0x01"}
+    legacy_codes.discard(msg)
+    if not legacy_codes:
         return
+    placeholders = ",".join("?" for _ in legacy_codes)
     conn.execute(
-        "UPDATE cameras SET last_error = ? "
-        "WHERE status = 'unknown' AND TRIM(IFNULL(last_error, '')) = '0x03'",
-        (new_code,),
+        f"UPDATE cameras SET last_error = ? "
+        f"WHERE status = 'unknown' AND TRIM(IFNULL(last_error, '')) IN ({placeholders})",
+        (msg, *legacy_codes),
     )
 
 

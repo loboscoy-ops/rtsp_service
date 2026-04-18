@@ -90,7 +90,13 @@ class CameraCheckWorker(QRunnable):
         #   ultra  — статус unknown + UNKNOWN_DEEP_FAIL_CODE: длинный таймаут, при тайм-ауте уходим в offline.
         prev_status = self.camera.status
         prev_error = (self.camera.last_error or "").strip()
-        is_ultra = prev_status == "unknown" and prev_error == config.UNKNOWN_DEEP_FAIL_CODE
+        # Камера уже однажды получила deep-fail если в last_error содержится её код
+        # (либо «голый» 0x01, либо текст «Буферизация > 2 min (0x01)»).
+        is_ultra = (
+            prev_status == "unknown"
+            and config.UNKNOWN_DEEP_FAIL_CODE
+            and config.UNKNOWN_DEEP_FAIL_CODE in prev_error
+        )
         is_deep = (not is_ultra) and prev_status == "unknown"
 
         if is_ultra:
@@ -180,7 +186,7 @@ class CameraCheckWorker(QRunnable):
             camera_id=self.camera.id,
             status="unknown",
             checked_at=checked_at,
-            error=config.UNKNOWN_DEEP_FAIL_CODE if is_deep else None,
+            error=config.UNKNOWN_DEEP_FAIL_MESSAGE if is_deep else None,
             seen_online_at=last_seen,
         )
 
