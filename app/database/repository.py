@@ -291,6 +291,58 @@ class Repository:
             conn.execute("UPDATE objects SET updated_at = ? WHERE id = ?", (ts, object_id))
             return int(cur.lastrowid), "created"
 
+    def bulk_update_field(self, camera_ids: list[int], field: str, value) -> int:
+        """Массовое обновление одного поля у камер. Возвращает число затронутых строк."""
+        allowed = {"group_name", "gps_coords", "uin", "enabled", "object_id"}
+        if field not in allowed:
+            raise ValueError(f"Поле {field} нельзя обновлять массово")
+        if not camera_ids:
+            return 0
+        placeholders = ",".join("?" for _ in camera_ids)
+        ts = now_iso()
+        sql = (
+            f"UPDATE cameras SET {field} = ?, updated_at = ? "
+            f"WHERE id IN ({placeholders})"
+        )
+        params = [value, ts, *camera_ids]
+        with get_connection() as conn:
+            cur = conn.execute(sql, params)
+            object_ids = [
+                int(r["object_id"])
+                for r in conn.execute(
+                    f"SELECT DISTINCT object_id FROM cameras WHERE id IN ({placeholders})",
+                    camera_ids,
+                ).fetchall()
+            ]
+            for obj_id in object_ids:
+                conn.execute(
+                    "UPDATE objects SET updated_at = ? WHERE id = ?",
+                    (ts, obj_id),
+                )
+            return int(cur.rowcount or 0)
+
+    def bulk_delete_cameras(self, camera_ids: list[int]) -> int:
+        if not camera_ids:
+            return 0
+        placeholders = ",".join("?" for _ in camera_ids)
+        ts = now_iso()
+        with get_connection() as conn:
+            object_ids = [
+                int(r["object_id"])
+                for r in conn.execute(
+                    f"SELECT DISTINCT object_id FROM cameras WHERE id IN ({placeholders})",
+                    camera_ids,
+                ).fetchall()
+            ]
+            cur = conn.execute(
+                f"DELETE FROM cameras WHERE id IN ({placeholders})", camera_ids
+            )
+            for obj_id in object_ids:
+                conn.execute(
+                    "UPDATE objects SET updated_at = ? WHERE id = ?", (ts, obj_id)
+                )
+            return int(cur.rowcount or 0)
+
     def update_camera_status(
         self,
         camera_id: int,

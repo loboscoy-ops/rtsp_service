@@ -184,6 +184,9 @@ class MainWindow(QMainWindow):
         self.table.coordinates_copied.connect(self._on_coords_copied)
         self.table.rtsp_copied.connect(self._on_rtsp_copied)
         self.table.sort_changed.connect(self._on_sort_changed)
+        self.table.bulk_check_requested.connect(self._bulk_check)
+        self.table.bulk_delete_requested.connect(self._bulk_delete)
+        self.table.bulk_edit_requested.connect(self._bulk_edit)
         self.checker.camera_checked.connect(self._on_camera_checked)
 
     def _log(self, message: str) -> None:
@@ -394,6 +397,90 @@ class MainWindow(QMainWindow):
         self._refresh_objects()
         self._refresh_cameras()
         self._log(f"Удален объект: {obj.name}")
+
+    def _bulk_check(self, camera_ids: list[int]) -> None:
+        cams = [c for c in (self.repo.get_camera(cid) for cid in camera_ids) if c]
+        self.checker.check_many(cams)
+        self._log(f"Запущена проверка выделенных: {len(cams)} камер")
+
+    def _bulk_delete(self, camera_ids: list[int]) -> None:
+        if not camera_ids:
+            return
+        resp = QMessageBox.question(
+            self,
+            "Удаление",
+            f"Удалить выделенные камеры ({len(camera_ids)})?",
+        )
+        if resp != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            removed = self.repo.bulk_delete_cameras(camera_ids)
+        except Exception as exc:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось удалить камеры:\n{exc}")
+            return
+        self._refresh_objects()
+        self._refresh_cameras()
+        self._log(f"Удалено камер: {removed}")
+
+    def _bulk_edit(self, camera_ids: list[int], field: str) -> None:
+        if not camera_ids:
+            return
+
+        labels = {
+            "group_name": ("Тип (группа)", "Новый тип/группа для выделенных камер:"),
+            "gps_coords": ("Координаты (GPS)", "Новые координаты для выделенных камер (пусто = очистить):"),
+            "uin": ("УИН", "Новый УИН для выделенных камер (пусто = очистить):"),
+        }
+
+        try:
+            if field in labels:
+                title, prompt = labels[field]
+                value, ok = QInputDialog.getText(
+                    self,
+                    f"Массовое изменение: {title}",
+                    f"{prompt}\nЗатронет камер: {len(camera_ids)}",
+                    QLineEdit.EchoMode.Normal,
+                    "",
+                )
+                if not ok:
+                    return
+                affected = self.repo.bulk_update_field(camera_ids, field, value.strip())
+                self._log(f"Массово обновлено «{title}» у {affected} камер")
+
+            elif field == "object_id":
+                if not self.objects_cache:
+                    QMessageBox.information(self, "Перенос", "Нет доступных объектов")
+                    return
+                names = [o.name for o in self.objects_cache]
+                name, ok = QInputDialog.getItem(
+                    self,
+                    "Перенести в объект",
+                    f"Выберите объект для {len(camera_ids)} камер:",
+                    names,
+                    0,
+                    False,
+                )
+                if not ok:
+                    return
+                target = next((o for o in self.objects_cache if o.name == name), None)
+                if not target:
+                    return
+                affected = self.repo.bulk_update_field(camera_ids, "object_id", target.id)
+                self._log(f"Перенесено камер в «{target.name}»: {affected}")
+
+            elif field in ("enable", "disable"):
+                value = 1 if field == "enable" else 0
+                affected = self.repo.bulk_update_field(camera_ids, "enabled", value)
+                state = "включено" if value else "выключено"
+                self._log(f"Массово {state} камер: {affected}")
+            else:
+                return
+        except Exception as exc:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось применить массовое изменение:\n{exc}")
+            return
+
+        self._refresh_objects()
+        self._refresh_cameras()
 
     def _open_camera_stream(self, camera_id: int) -> None:
         cam = self.repo.get_camera(camera_id)

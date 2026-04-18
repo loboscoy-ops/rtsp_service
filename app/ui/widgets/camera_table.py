@@ -23,6 +23,9 @@ class CameraTable(QTableWidget):
     coordinates_copied = Signal(str)
     rtsp_copied = Signal(str)
     sort_changed = Signal(int, Qt.SortOrder)
+    bulk_check_requested = Signal(list)
+    bulk_delete_requested = Signal(list)
+    bulk_edit_requested = Signal(list, str)
 
     COLUMNS = [
         "№",
@@ -48,7 +51,7 @@ class CameraTable(QTableWidget):
         super().__init__(0, len(self.COLUMNS))
         self.setHorizontalHeaderLabels(self.COLUMNS)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.verticalHeader().setVisible(False)
         self.setAlternatingRowColors(True)
@@ -104,8 +107,23 @@ class CameraTable(QTableWidget):
                 continue
         return None
 
+    def selected_camera_ids(self) -> list[int]:
+        ids: list[int] = []
+        seen: set[int] = set()
+        for index in self.selectionModel().selectedRows() if self.selectionModel() else []:
+            cam_id = self._row_camera_id(index.row())
+            if cam_id is not None and cam_id not in seen:
+                seen.add(cam_id)
+                ids.append(cam_id)
+        return ids
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            ids = self.selected_camera_ids()
+            if len(ids) > 1:
+                self.bulk_delete_requested.emit(ids)
+                event.accept()
+                return
             cam_id = self.selected_camera_id()
             if cam_id is not None:
                 self.delete_requested.emit(cam_id)
@@ -213,8 +231,20 @@ class CameraTable(QTableWidget):
         cam_id = self._row_camera_id(row)
         if cam_id is None:
             return
-        self.selectRow(row)
 
+        # Если ПКМ по строке вне выделения — переключаемся на эту одну строку.
+        selected_ids = self.selected_camera_ids()
+        if cam_id not in selected_ids:
+            self.clearSelection()
+            self.selectRow(row)
+            selected_ids = [cam_id]
+
+        if len(selected_ids) > 1:
+            self._exec_bulk_menu(pos, selected_ids)
+        else:
+            self._exec_single_menu(pos, row, cam_id)
+
+    def _exec_single_menu(self, pos: QPoint, row: int, cam_id: int) -> None:
         menu = QMenu(self)
         open_act = QAction("Открыть поток (⌘⏎)", menu)
         open_act.triggered.connect(lambda: self.open_requested.emit(cam_id))
@@ -245,6 +275,51 @@ class CameraTable(QTableWidget):
         menu.addSeparator()
         delete_act = QAction("Удалить (Backspace)", menu)
         delete_act.triggered.connect(lambda: self.delete_requested.emit(cam_id))
+        menu.addAction(delete_act)
+
+        menu.exec(self.viewport().mapToGlobal(pos))
+
+    def _exec_bulk_menu(self, pos: QPoint, ids: list[int]) -> None:
+        menu = QMenu(self)
+        title = QAction(f"Выделено камер: {len(ids)}", menu)
+        title.setEnabled(False)
+        menu.addAction(title)
+        menu.addSeparator()
+
+        check_act = QAction("Проверить выделенные", menu)
+        check_act.triggered.connect(lambda: self.bulk_check_requested.emit(ids))
+        menu.addAction(check_act)
+
+        menu.addSeparator()
+
+        edit_menu = menu.addMenu("Изменить поле…")
+        for label, key in (
+            ("Тип (группа)", "group_name"),
+            ("Координаты (GPS)", "gps_coords"),
+            ("УИН", "uin"),
+            ("Перенести в объект…", "object_id"),
+        ):
+            act = QAction(label, edit_menu)
+            act.triggered.connect(
+                lambda _checked=False, k=key: self.bulk_edit_requested.emit(ids, k)
+            )
+            edit_menu.addAction(act)
+
+        enable_act = QAction("Включить (enabled = да)", menu)
+        enable_act.triggered.connect(
+            lambda: self.bulk_edit_requested.emit(ids, "enable")
+        )
+        menu.addAction(enable_act)
+
+        disable_act = QAction("Выключить (enabled = нет)", menu)
+        disable_act.triggered.connect(
+            lambda: self.bulk_edit_requested.emit(ids, "disable")
+        )
+        menu.addAction(disable_act)
+
+        menu.addSeparator()
+        delete_act = QAction(f"Удалить выделенные ({len(ids)}) — Backspace", menu)
+        delete_act.triggered.connect(lambda: self.bulk_delete_requested.emit(ids))
         menu.addAction(delete_act)
 
         menu.exec(self.viewport().mapToGlobal(pos))
