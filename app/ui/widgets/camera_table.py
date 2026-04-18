@@ -31,7 +31,6 @@ class CameraTable(QTableWidget):
         "№",
         "Объект",
         "УИН",
-        "ID камеры",
         "Имя камеры",
         "Тип",
         "Координаты",
@@ -40,12 +39,13 @@ class CameraTable(QTableWidget):
         "Ошибка",
         "RTSP",
     ]
-    COL_NUM, COL_OBJECT, COL_UIN, COL_ID, COL_NAME = 0, 1, 2, 3, 4
-    COL_TYPE, COL_GPS = 5, 6
-    COL_STATUS, COL_CHECKED, COL_ERR = 7, 8, 9
-    COL_RTSP = 10
+    COL_NUM, COL_OBJECT, COL_UIN, COL_NAME = 0, 1, 2, 3
+    COL_TYPE, COL_GPS = 4, 5
+    COL_STATUS, COL_CHECKED, COL_ERR = 6, 7, 8
+    COL_RTSP = 9
+    COL_ID = -1
     COL_SEEN = -1
-    SETTINGS_HIDDEN_KEY = "camera_table/hidden_columns_v4"
+    SETTINGS_HIDDEN_KEY = "camera_table/hidden_columns_v5"
 
     def __init__(self):
         super().__init__(0, len(self.COLUMNS))
@@ -95,17 +95,7 @@ class CameraTable(QTableWidget):
         row = self.currentRow()
         if row < 0 or row >= self.rowCount():
             return None
-        for col in (self.COL_NUM, self.COL_ID, self.COL_OBJECT):
-            item = self.item(row, col)
-            if not item:
-                continue
-            data = item.data(Qt.ItemDataRole.UserRole)
-            try:
-                if data is not None:
-                    return int(data)
-            except (TypeError, ValueError):
-                continue
-        return None
+        return self._row_camera_id(row)
 
     def selected_camera_ids(self) -> list[int]:
         ids: list[int] = []
@@ -179,13 +169,12 @@ class CameraTable(QTableWidget):
         self._set_hover_tooltip(uin_item, cam.uin)
         self.setItem(row, self.COL_UIN, uin_item)
 
-        id_item = QTableWidgetItem(cam.camera_identifier)
-        id_item.setData(Qt.ItemDataRole.UserRole, cam.id)
-        self._set_hover_tooltip(id_item, cam.camera_identifier)
-        self.setItem(row, self.COL_ID, id_item)
-
         name_item = QTableWidgetItem(cam.camera_name)
-        self._set_hover_tooltip(name_item, cam.camera_name)
+        # camera_identifier теперь не имеет своей колонки — оставляем доступ через tooltip / поиск.
+        tooltip_text = cam.camera_name
+        if cam.camera_identifier:
+            tooltip_text = f"{cam.camera_name}\nID камеры: {cam.camera_identifier}"
+        self._set_hover_tooltip(name_item, tooltip_text)
         self.setItem(row, self.COL_NAME, name_item)
 
         type_item = QTableWidgetItem(cam.group_name)
@@ -232,7 +221,7 @@ class CameraTable(QTableWidget):
     def _row_camera_id(self, row: int) -> int | None:
         if row < 0 or row >= self.rowCount():
             return None
-        for col in (self.COL_NUM, self.COL_ID, self.COL_OBJECT):
+        for col in (self.COL_NUM, self.COL_OBJECT):
             item = self.item(row, col)
             if not item:
                 continue

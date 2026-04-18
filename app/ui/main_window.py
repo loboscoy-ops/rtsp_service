@@ -232,8 +232,6 @@ class MainWindow(QMainWindow):
                 return (cam.object_name or "").lower()
             if col == T.COL_UIN:
                 return (cam.uin or "").lower()
-            if col == T.COL_ID:
-                return (cam.camera_identifier or "").lower()
             if col == T.COL_NAME:
                 return (cam.camera_name or "").lower()
             if col == T.COL_TYPE:
