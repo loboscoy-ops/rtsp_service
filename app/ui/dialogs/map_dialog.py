@@ -18,11 +18,14 @@ from PySide6.QtWidgets import (
 if TYPE_CHECKING:
     from app.database.models import CameraModel
 
+# WebEngine ловим максимально широко: на разных сборках PySide6/macOS
+# импорт может падать не только ImportError, но и OSError/RuntimeError
+# (отсутствуют фреймворки, нет sandbox-helper'а и т.п.).
 try:
-    from PySide6.QtWebEngineWidgets import QWebEngineView
+    from PySide6.QtWebEngineWidgets import QWebEngineView  # type: ignore
 
     _WEBENGINE = True
-except ImportError:
+except Exception:
     QWebEngineView = None  # type: ignore[misc, assignment]
     _WEBENGINE = False
 
