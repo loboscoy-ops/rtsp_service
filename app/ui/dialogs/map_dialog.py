@@ -99,6 +99,10 @@ function escHtml(s) {{
 }}
 const markers = {markers_json};
 const map = L.map('map', {{ zoomControl: true }});
+map.attributionControl.setPrefix(
+  '<span aria-hidden="true">\\uD83C\\uDDF7\\uD83C\\uDDFA</span> '
+  + '<a href="https://leafletjs.com" target="_blank">Leaflet</a>'
+);
 L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
   maxZoom: 19,
   attribution: '&copy; OpenStreetMap'
