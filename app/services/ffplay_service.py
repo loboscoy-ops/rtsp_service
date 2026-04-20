@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 
 from app import config
-from app.utils.process_utils import ensure_binary_exists
+from app.utils.process_utils import ensure_binary_exists, resolve_binary
 
 log = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ class FFPlayService:
                 error=f"ffplay не найден: {config.FFPLAY_BIN}. Установите ffmpeg.",
             )
         cmd = [
-            config.FFPLAY_BIN,
+            resolve_binary(config.FFPLAY_BIN),
             "-rtsp_transport",
             "tcp",
             "-window_title",

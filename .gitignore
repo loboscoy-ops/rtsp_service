@@ -15,3 +15,6 @@ data/*.db.backup
 data/*.sqlite
 data/*.xlsx
 resources/*.xlsx
+build/
+dist/
+*.spec
