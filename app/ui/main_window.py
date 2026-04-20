@@ -51,6 +51,7 @@ from app.ui.constants import (
 )
 from app.ui.dialogs.camera_dialog import CameraDialog
 from app.ui.dialogs.import_dialog import ImportDialog
+from app.ui.dialogs.map_dialog import MapDialog
 from app.ui.dialogs.object_dialog import ObjectDialog
 from app.ui.widgets.camera_table import CameraTable
 from app.ui.widgets.object_sidebar import ObjectSidebar
@@ -127,6 +128,12 @@ class MainWindow(QMainWindow):
         self.git_btn = self._add_toolbar_button(
             toolbar, "Обновить из GitHub", self._git_pull_from_github,
             tooltip="git pull --ff-only origin main",
+        )
+        self._add_toolbar_button(
+            toolbar,
+            "Карта",
+            self._open_map_dialog,
+            tooltip="Карта камер по координатам (как в таблице, № совпадает)",
         )
 
         toolbar.addSeparator()
@@ -690,6 +697,14 @@ class MainWindow(QMainWindow):
 
     def _on_rtsp_copied(self, url: str) -> None:
         self._log(f"RTSP-ссылка скопирована: {mask_rtsp_url(url)}")
+
+    def _open_map_dialog(self) -> None:
+        if not self.cameras_cache:
+            QMessageBox.information(self, "Карта", "Нет камер в текущем списке.")
+            return
+        obj = self._selected_object()
+        label = obj.name if obj else "объект не выбран"
+        MapDialog(self.cameras_cache, object_label=label, parent=self).exec()
 
     # ==================================================================
     # import dialog

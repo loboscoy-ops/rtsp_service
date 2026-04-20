@@ -47,6 +47,8 @@ pyinstaller \
     --clean \
     --name "${APP_NAME}" \
     --add-data "resources:resources" \
+    --hidden-import PySide6.QtWebEngineWidgets \
+    --hidden-import PySide6.QtWebEngineCore \
     --osx-bundle-identifier "com.urus.rtsp-monitor" \
     "${ENTRY}"
 
