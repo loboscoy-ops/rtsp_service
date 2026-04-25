@@ -151,10 +151,13 @@ if [ -z "${DOWNLOAD_URL}" ]; then
     exit 1
 fi
 
-# --- ставим тег локально (если ещё нет) ------------------------------------
+# --- синхронизируем локальный тег (GitHub мог создать тег при создании релиза)
+if ! git rev-parse "${TAG}" >/dev/null 2>&1; then
+    git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}" 2>/dev/null || true
+fi
 if ! git rev-parse "${TAG}" >/dev/null 2>&1; then
     git tag -a "${TAG}" -m "${TAG}"
-    git push origin "${TAG}" >/dev/null
+    git push origin "${TAG}" 2>/dev/null || true
 fi
 
 echo
