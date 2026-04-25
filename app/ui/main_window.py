@@ -32,6 +32,11 @@ from app.database.repository import Repository
 from app.services.camera_checker import CameraChecker, CheckResult
 from app.services.ffplay_service import FFPlayService
 from app.services.git_service import GitPullService
+from app.services.release_service import (
+    RELEASES_PAGE_URL,
+    ReleaseService,
+    fetch_latest_release,
+)
 from app.services.import_service import ImportService
 from app.services.template_service import TemplateService
 from app.ui.constants import (
@@ -72,6 +77,8 @@ class MainWindow(QMainWindow):
         self.import_service = ImportService(self.repo)
         self.template_service = TemplateService()
         self._git_service: Optional[GitPullService] = None
+        self._release_service: Optional[ReleaseService] = None
+        self._latest_remote_version: Optional[str] = None
 
         self.current_object_id: Optional[int] = None
         self.objects_cache: list[ObjectModel] = []
@@ -771,11 +778,22 @@ class MainWindow(QMainWindow):
             self._git_service.updates_checked.connect(self._on_git_updates_checked)
         return self._git_service
 
+    def _ensure_release_service(self) -> ReleaseService:
+        if self._release_service is None:
+            self._release_service = ReleaseService(self)
+            self._release_service.version_checked.connect(self._on_remote_version_checked)
+            self._release_service.install_finished.connect(self._on_release_install_done)
+        return self._release_service
+
     def _setup_git_update_watcher(self) -> None:
-        # Если репозиторий не клонирован — фоновая проверка не имеет смысла,
-        # кнопка по нажатию покажет инструкцию.
-        if self._ensure_git_service() is None:
-            return
+        # Frozen .app: git pull исходников ничего не меняет в собранном
+        # бандле, поэтому смотрим APP_VERSION в репозитории и при наличии
+        # релиза скачиваем .dmg. В dev-режиме — обычный git pull.
+        if config.IS_FROZEN:
+            self._ensure_release_service()
+        else:
+            if self._ensure_git_service() is None:
+                return
         self._git_check_timer = QTimer(self)
         self._git_check_timer.setInterval(GIT_UPDATE_CHECK_INTERVAL_MS)
         self._git_check_timer.timeout.connect(self._check_git_updates)
@@ -783,9 +801,20 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(GIT_UPDATE_FIRST_CHECK_DELAY_MS, self._check_git_updates)
 
     def _check_git_updates(self) -> None:
+        if config.IS_FROZEN:
+            self._ensure_release_service().check()
+            return
         svc = self._ensure_git_service()
         if svc is not None:
             svc.check_updates()
+
+    def _on_remote_version_checked(self, remote: str, is_newer: bool, error: str) -> None:
+        if error:
+            self._log(f"github: проверка версии не удалась — {error}")
+            return
+        self._latest_remote_version = remote or None
+        self._pending_updates_count = 1 if is_newer else 0
+        self._apply_git_btn_state()
 
     def _on_git_updates_checked(self, count: int, message: str) -> None:
         # count == -1 → ошибка проверки, не трогаем подсветку, но логируем тихо.
@@ -798,19 +827,38 @@ class MainWindow(QMainWindow):
     def _apply_git_btn_state(self) -> None:
         count = self._pending_updates_count
         if count > 0:
-            label = f"Обновить из GitHub ● {count}"
+            if config.IS_FROZEN and self._latest_remote_version:
+                label = f"Обновить до v{self._latest_remote_version}"
+                tip = (
+                    f"Доступна новая версия v{self._latest_remote_version} "
+                    f"(сейчас {config.APP_VERSION}).\n"
+                    "Нажмите, чтобы скачать и установить .dmg."
+                )
+            else:
+                label = f"Обновить из GitHub ● {count}"
+                tip = (
+                    f"Доступно новых коммитов в origin/main: {count}\n"
+                    "Нажмите, чтобы выполнить git pull --ff-only"
+                )
             self.git_btn.setText(label)
             self.git_btn.setStyleSheet(GIT_BTN_HAS_UPDATES_QSS)
-            self.git_btn.setToolTip(
-                f"Доступно новых коммитов в origin/main: {count}\n"
-                "Нажмите, чтобы выполнить git pull --ff-only"
-            )
+            self.git_btn.setToolTip(tip)
         else:
             self.git_btn.setText("Обновить из GitHub")
             self.git_btn.setStyleSheet(self._git_btn_default_style)
-            self.git_btn.setToolTip("git pull --ff-only origin main")
+            if config.IS_FROZEN:
+                self.git_btn.setToolTip(
+                    f"Текущая версия v{config.APP_VERSION}.\n"
+                    "Проверка релизов в фоне каждые 10 мин."
+                )
+            else:
+                self.git_btn.setToolTip("git pull --ff-only origin main")
 
     def _git_pull_from_github(self) -> None:
+        if config.IS_FROZEN:
+            self._update_from_release()
+            return
+
         if config.PROJECT_GIT_DIR is None:
             QMessageBox.information(
                 self, "GitHub",
@@ -829,6 +877,71 @@ class MainWindow(QMainWindow):
         self.git_btn.setEnabled(False)
         self._log(f"git pull в {config.PROJECT_GIT_DIR}...")
         svc.start()
+
+    def _update_from_release(self) -> None:
+        """Frozen .app: пробуем подтянуть .dmg из GitHub Releases."""
+        release = fetch_latest_release()
+        if release is None or not release.dmg_url:
+            url_to_open = release.page_url if release else RELEASES_PAGE_URL
+            tail = (
+                f"\n\nСейчас установлена v{config.APP_VERSION}.\n"
+                f"Откройте страницу релизов и скачайте свежий .dmg вручную:\n{url_to_open}"
+            )
+            resp = QMessageBox.question(
+                self, "Обновление",
+                "Готового .dmg в последнем релизе не найдено."
+                + tail
+                + "\n\nОткрыть страницу релизов в браузере?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if resp == QMessageBox.StandardButton.Yes:
+                self._open_url_external(url_to_open)
+            return
+
+        question = (
+            f"Доступна новая версия v{release.tag} "
+            f"(сейчас v{config.APP_VERSION}).\n\n"
+            "Сейчас приложение скачает свежий .dmg и заменит установленный .app, "
+            "а затем перезапустится. Продолжить?"
+        )
+        resp = QMessageBox.question(
+            self, "Обновление",
+            question,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if resp != QMessageBox.StandardButton.Yes:
+            return
+        self.git_btn.setEnabled(False)
+        self.git_btn.setText("Скачивание .dmg…")
+        self._log(f"Скачиваю .dmg для v{release.tag}: {release.dmg_url}")
+        self._ensure_release_service().install(release.dmg_url)
+
+    def _on_release_install_done(self, ok: bool, message: str) -> None:
+        self.git_btn.setEnabled(True)
+        if not ok:
+            self._log_error(f"UPDATE: {message[:GIT_PULL_LOG_LIMIT]}")
+            QMessageBox.warning(
+                self, "Обновление",
+                f"Не удалось установить новую версию:\n{message}\n\n"
+                f"Можете скачать .dmg вручную: {RELEASES_PAGE_URL}",
+            )
+            self._apply_git_btn_state()
+            return
+        self._log(f"Новый .app установлен: {message}")
+        QMessageBox.information(
+            self, "Обновление",
+            "Новая версия установлена. Приложение сейчас перезапустится.",
+        )
+        self._restart_app()
+
+    @staticmethod
+    def _open_url_external(url: str) -> None:
+        try:
+            subprocess.Popen(["open", url], start_new_session=True)
+        except Exception:
+            pass
 
     def _on_git_pull_done(self, ok: bool, message: str) -> None:
         self.git_btn.setEnabled(True)
