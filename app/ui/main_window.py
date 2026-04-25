@@ -36,7 +36,8 @@ from app.services.git_service import GitPullService
 from app.services.release_service import (
     RELEASES_PAGE_URL,
     ReleaseService,
-    fetch_latest_release,
+    fetch_remote_version,
+    pick_release_for_upgrade,
 )
 from app.services.import_service import ImportService
 from app.services.template_service import TemplateService
@@ -940,29 +941,37 @@ class MainWindow(QMainWindow):
         svc.start()
 
     def _update_from_release(self) -> None:
-        """Frozen .app: пробуем подтянуть .dmg из GitHub Releases."""
-        release = fetch_latest_release()
-        if release is None or not release.dmg_url:
-            url_to_open = release.page_url if release else RELEASES_PAGE_URL
-            tail = (
-                f"\n\nСейчас установлена v{config.APP_VERSION}.\n"
-                f"Откройте страницу релизов и скачайте свежий .dmg вручную:\n{url_to_open}"
-            )
-            resp = QMessageBox.question(
+        """Frozen .app: подтягиваем .dmg из GitHub Releases (точный тег, не только «latest»)."""
+        rv = fetch_remote_version()
+        if rv.error:
+            QMessageBox.warning(
                 self, "Обновление",
-                "Готового .dmg в последнем релизе не найдено."
-                + tail
-                + "\n\nОткрыть страницу релизов в браузере?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes,
+                f"Не удалось узнать актуальную версию на GitHub:\n{rv.error}",
             )
-            if resp == QMessageBox.StandardButton.Yes:
-                self._open_url_external(url_to_open)
+            return
+        if not rv.is_newer:
+            QMessageBox.information(
+                self, "Обновление",
+                f"Уже установлена актуальная версия v{config.APP_VERSION}.",
+            )
+            return
+
+        release = pick_release_for_upgrade(rv.version, config.APP_VERSION)
+        if release is None or not release.dmg_url:
+            QMessageBox.information(
+                self, "Обновление",
+                (
+                    f"В репозитории на GitHub уже v{rv.version}, но готового .dmg "
+                    f"для установки пока нет (последний релиз отстаёт).\n\n"
+                    f"Откройте страницу релизов и скачайте сборку вручную, когда появится:\n"
+                    f"{RELEASES_PAGE_URL}"
+                ),
+            )
             return
 
         question = (
             f"Доступна новая версия v{release.tag} "
-            f"(сейчас v{config.APP_VERSION}).\n\n"
+            f"(сейчас v{config.APP_VERSION}, в main — v{rv.version}).\n\n"
             "Сейчас приложение скачает свежий .dmg и заменит установленный .app, "
             "а затем перезапустится. Продолжить?"
         )

@@ -37,6 +37,7 @@ RAW_CONFIG_URL = (
     f"https://raw.githubusercontent.com/{REPO_SLUG}/main/app/config.py"
 )
 RELEASES_LATEST_URL = f"https://api.github.com/repos/{REPO_SLUG}/releases/latest"
+RELEASES_TAG_URL_TMPL = f"https://api.github.com/repos/{REPO_SLUG}/releases/tags/{{tag}}"
 RELEASES_PAGE_URL = f"https://github.com/{REPO_SLUG}/releases"
 
 USER_AGENT = f"rtsp-camera-monitor/{config.APP_VERSION}"
@@ -113,16 +114,7 @@ def fetch_remote_version() -> RemoteVersion:
     return RemoteVersion(version=remote, is_newer=is_newer(remote, local), local=local)
 
 
-def fetch_latest_release() -> Optional[ReleaseAsset]:
-    """Достаёт последний релиз и ссылку на .dmg-asset (если есть)."""
-    try:
-        raw = _http_get(RELEASES_LATEST_URL, accept="application/vnd.github+json")
-    except (HTTPError, URLError, TimeoutError, OSError):
-        return None
-    try:
-        data = json.loads(raw.decode("utf-8", errors="replace"))
-    except json.JSONDecodeError:
-        return None
+def _parse_release_json(data: dict) -> Optional[ReleaseAsset]:
     tag = (data.get("tag_name") or "").lstrip("vV")
     page = data.get("html_url") or RELEASES_PAGE_URL
     body = data.get("body") or ""
@@ -135,6 +127,63 @@ def fetch_latest_release() -> Optional[ReleaseAsset]:
     if not tag:
         return None
     return ReleaseAsset(tag=tag, dmg_url=dmg_url, page_url=page, body=body)
+
+
+def fetch_release_by_tag(version_or_tag: str) -> Optional[ReleaseAsset]:
+    """Релиз по тегу, например «0.1.39» или «v0.1.39». 404 → None."""
+    raw_tag = (version_or_tag or "").strip().lstrip("vV")
+    if not raw_tag:
+        return None
+    url = RELEASES_TAG_URL_TMPL.format(tag=f"v{raw_tag}")
+    try:
+        body = _http_get(url, accept="application/vnd.github+json")
+    except HTTPError as exc:
+        if exc.code == 404:
+            return None
+        return None
+    except (URLError, TimeoutError, OSError):
+        return None
+    try:
+        data = json.loads(body.decode("utf-8", errors="replace"))
+    except json.JSONDecodeError:
+        return None
+    return _parse_release_json(data)
+
+
+def fetch_latest_release() -> Optional[ReleaseAsset]:
+    """Достаёт последний релиз и ссылку на .dmg-asset (если есть)."""
+    try:
+        raw = _http_get(RELEASES_LATEST_URL, accept="application/vnd.github+json")
+    except (HTTPError, URLError, TimeoutError, OSError):
+        return None
+    try:
+        data = json.loads(raw.decode("utf-8", errors="replace"))
+    except json.JSONDecodeError:
+        return None
+    return _parse_release_json(data)
+
+
+def pick_release_for_upgrade(remote_version: str, local_version: str) -> Optional[ReleaseAsset]:
+    """Выбирает .dmg для обновления с local_version до remote_version.
+
+    1) Точный релиз v{remote_version} с ассетом .dmg.
+    2) Иначе «latest», но только если он не старее remote_version
+       (код в main уже 0.1.40, а latest ещё 0.1.39 — не предлагаем старый .dmg).
+    """
+    if not remote_version:
+        return None
+    exact = fetch_release_by_tag(remote_version)
+    if exact and exact.dmg_url and is_newer(exact.tag, local_version):
+        return exact
+    latest = fetch_latest_release()
+    if (
+        latest
+        and latest.dmg_url
+        and is_newer(latest.tag, local_version)
+        and not is_newer(remote_version, latest.tag)
+    ):
+        return latest
+    return None
 
 
 # --- установка .dmg --------------------------------------------------------
