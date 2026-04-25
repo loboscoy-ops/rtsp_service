@@ -30,16 +30,19 @@ class CheckResult:
 
 
 class CheckLevel(Enum):
-    """Три уровня глубины проверки RTSP-потока через ffprobe."""
+    """Два уровня глубины проверки RTSP-потока через ffprobe.
 
-    NORMAL = "normal"   # online / offline / новая
-    DEEP = "deep"       # уже unknown без deep-кода
-    ULTRA = "ultra"     # unknown + код deep-fail (последняя попытка перед offline)
+    NORMAL — быстрая (5 c) проверка для всех камер.
+    DEEP   — длинная (120 c) проверка для камер, которые предыдущим тиком
+             ушли в unknown. После DEEP результат всегда детерминирован:
+             либо online, либо offline. Никаких «висящих» unknown.
+    """
+
+    NORMAL = "normal"
+    DEEP = "deep"
 
     @property
     def timeout_sec(self) -> int:
-        if self is CheckLevel.ULTRA:
-            return max(1, config.CHECK_TIMEOUT_ULTRA_SEC)
         if self is CheckLevel.DEEP:
             return max(1, config.CHECK_TIMEOUT_DEEP_SEC)
         return max(1, config.CHECK_TIMEOUT_SEC)
@@ -179,13 +182,11 @@ class CameraCheckWorker(QRunnable):
         ]
 
     def _resolve_check_level(self) -> CheckLevel:
-        if self.camera.status != "unknown":
-            return CheckLevel.NORMAL
-        prev_error = (self.camera.last_error or "").strip()
-        deep_code = config.UNKNOWN_DEEP_FAIL_CODE
-        if deep_code and deep_code in prev_error:
-            return CheckLevel.ULTRA
-        return CheckLevel.DEEP
+        # Камера, которая в прошлый раз не ответила за 5 c, получает один
+        # длинный шанс на ~2 минуты. По его итогу — online или offline.
+        if self.camera.status == "unknown":
+            return CheckLevel.DEEP
+        return CheckLevel.NORMAL
 
     # -- factories ----------------------------------------------------------
 
@@ -223,14 +224,17 @@ class CameraCheckWorker(QRunnable):
         last_seen: Optional[str],
         level: CheckLevel,
     ) -> CheckResult:
-        if level is CheckLevel.ULTRA:
+        # После длинной (DEEP) проверки тайм-аут означает «не подключается»,
+        # камера уходит в offline. После короткой (NORMAL) проверки тайм-аут
+        # ещё не приговор — оставляем unknown и даём шанс длинной проверке
+        # на следующем тике.
+        if level is CheckLevel.DEEP:
             return self._offline_result(
                 checked_at,
                 last_seen,
                 error=config.UNKNOWN_OFFLINE_FAIL_MESSAGE,
             )
-        error = config.UNKNOWN_DEEP_FAIL_MESSAGE if level is CheckLevel.DEEP else None
-        return self._unknown_result(checked_at, last_seen, error=error)
+        return self._unknown_result(checked_at, last_seen, error=None)
 
     # -- emit ---------------------------------------------------------------
 

@@ -81,43 +81,33 @@ def initialize_database(db_path: Path | None = None) -> None:
     with _connect(path) as conn:
         conn.executescript(SCHEMA)
         _ensure_columns(conn)
-        _normalize_error_codes(conn)
-        _migrate_clear_v031_spurious_deep_fail(conn)
+        _migrate_drop_legacy_unknown_codes(conn)
         conn.commit()
 
 
-def _normalize_error_codes(conn) -> None:
-    """Переводим старые «голые» коды deep-проверки в новый текстовый формат."""
-    msg = config.UNKNOWN_DEEP_FAIL_MESSAGE
-    legacy_codes = {"0x03", "0x01"}
-    legacy_codes.discard(msg)
-    if not legacy_codes:
-        return
-    placeholders = ",".join("?" for _ in legacy_codes)
-    conn.execute(
-        f"UPDATE cameras SET last_error = ? "
-        f"WHERE status = 'unknown' AND TRIM(IFNULL(last_error, '')) IN ({placeholders})",
-        (msg, *legacy_codes),
-    )
+def _migrate_drop_legacy_unknown_codes(conn) -> None:
+    """В v0.1.36 убрали промежуточный unknown-код «0x01 Буферизация > 2 min»
+    (а также его предшественника «0x03»). Теперь камера после короткой 5 c
+    проверки уходит в unknown один раз и на следующем тике попадает на
+    длинную (~2 мин) проверку, по итогу которой становится online или offline.
 
-
-def _migrate_clear_v031_spurious_deep_fail(conn) -> None:
-    """v0.1.31 имел баг: ffprobe валился на «-stimeout», а наш детектор
-    таймаута видел подстроку «timeout» в «Unrecognized option 'stimeout'»
-    и помечал живые камеры кодом deep-fail. После рестарта они уходили
-    бы сразу в 120-секундный ULTRA-режим. Сбрасываем эти отметки один раз
-    (через PRAGMA user_version), чтобы следующая проверка пошла по
-    нормальному (или DEEP) пути и быстро вернула реальные статусы.
+    Чтобы старые БД, в которых эти коды могли «залипнуть» в last_error,
+    начали жить по новой схеме — обнуляем такие пометки. Делаем это один
+    раз (PRAGMA user_version), чтобы пользовательские заметки об ошибках
+    у offline-камер не затирались при каждом запуске.
     """
-    target_version = 1
+    target_version = 2
     cur_version = conn.execute("PRAGMA user_version").fetchone()[0]
     if cur_version >= target_version:
         return
-    msg = config.UNKNOWN_DEEP_FAIL_MESSAGE
     conn.execute(
         "UPDATE cameras SET last_error = NULL "
-        "WHERE status = 'unknown' AND TRIM(IFNULL(last_error, '')) = ?",
-        (msg,),
+        "WHERE status = 'unknown' AND ("
+        "  TRIM(IFNULL(last_error, '')) IN ('0x01', '0x03') "
+        "  OR IFNULL(last_error, '') LIKE '%Буферизация > 2 min%' "
+        "  OR IFNULL(last_error, '') LIKE '%(0x01)%' "
+        "  OR IFNULL(last_error, '') LIKE '%(0x03)%' "
+        ")",
     )
     conn.execute(f"PRAGMA user_version = {target_version}")
 

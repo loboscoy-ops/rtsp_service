@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 APP_NAME = "RTSP Camera Monitor"
-APP_VERSION = "0.1.35"
+APP_VERSION = "0.1.36"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 IS_FROZEN = bool(getattr(sys, "frozen", False))
@@ -63,22 +63,13 @@ EXCEL_TEMPLATE_HEADERS = [
 
 CHECK_INTERVAL_SEC = int(os.getenv("RTSP_CHECK_INTERVAL_SEC", "60"))
 CHECK_TIMEOUT_SEC = int(os.getenv("RTSP_CHECK_TIMEOUT_SEC", "5"))
-# Глубокая проверка для камер со статусом unknown — даём им больше времени.
-CHECK_TIMEOUT_DEEP_SEC = int(os.getenv("RTSP_CHECK_TIMEOUT_DEEP_SEC", "10"))
-# Код в колонке «Ошибка», если глубокая проверка всё равно не достучалась.
-UNKNOWN_DEEP_FAIL_CODE = os.getenv("RTSP_UNKNOWN_DEEP_FAIL_CODE", "0x01")
-# Текст-метка для этого кода (показывается в таблице).
-UNKNOWN_DEEP_FAIL_MESSAGE = os.getenv(
-    "RTSP_UNKNOWN_DEEP_FAIL_MESSAGE",
-    f"Буферизация > 2 min ({UNKNOWN_DEEP_FAIL_CODE})",
-)
-# «Финальная» проверка для unknown + UNKNOWN_DEEP_FAIL_CODE: длинный таймаут,
-# после которого камера уходит в offline.
-CHECK_TIMEOUT_ULTRA_SEC = int(os.getenv("RTSP_CHECK_TIMEOUT_ULTRA_SEC", "120"))
-# Текст ошибки, который попадает в колонку «Ошибка» при offline после финальной проверки.
+# «Длинная» проверка для камер со статусом unknown: один раз даём ~2 минуты,
+# после неё камера обязана стать либо online, либо offline (без зависших unknown).
+CHECK_TIMEOUT_DEEP_SEC = int(os.getenv("RTSP_CHECK_TIMEOUT_DEEP_SEC", "120"))
+# Текст ошибки, который попадает в колонку «Ошибка» при offline после длинной проверки.
 UNKNOWN_OFFLINE_FAIL_MESSAGE = os.getenv(
     "RTSP_UNKNOWN_OFFLINE_FAIL_MESSAGE",
-    "RTSP не запускается",
+    "RTSP не подключается > 2 мин",
 )
 # Префикс-код, который ставится в колонку «Ошибка» для любой offline-камеры.
 OFFLINE_ERROR_CODE = os.getenv("RTSP_OFFLINE_ERROR_CODE", "0x00")
