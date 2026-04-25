@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
 import sys
@@ -8,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QThreadPool, QTimer
 from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
@@ -57,6 +58,7 @@ from app.ui.constants import (
     SIDEBAR_MIN_WIDTH,
     STATUS_BAR_MESSAGE_MS,
     STATUSBAR_PADDING_PX,
+    THREADPOOL_SHUTDOWN_WAIT_MS,
     WINDOW_DEFAULT_SIZE,
 )
 from app.ui.dialogs.camera_dialog import CameraDialog
@@ -66,6 +68,8 @@ from app.ui.dialogs.object_dialog import ObjectDialog
 from app.ui.widgets.camera_table import CameraTable
 from app.ui.widgets.object_sidebar import ObjectSidebar
 from app.utils.validators import mask_rtsp_url
+
+_log = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
@@ -79,6 +83,7 @@ class MainWindow(QMainWindow):
         self._git_service: Optional[GitPullService] = None
         self._release_service: Optional[ReleaseService] = None
         self._latest_remote_version: Optional[str] = None
+        self._closing = False
 
         self.current_object_id: Optional[int] = None
         self.objects_cache: list[ObjectModel] = []
@@ -283,10 +288,16 @@ class MainWindow(QMainWindow):
     # ==================================================================
 
     def _log(self, message: str) -> None:
+        if self._closing:
+            _log.info("%s", message)
+            return
         self.log_text.append(message)
         self.statusBar().showMessage(message, STATUS_BAR_MESSAGE_MS)
 
     def _log_error(self, message: str) -> None:
+        if self._closing:
+            _log.warning("%s", message)
+            return
         ts = datetime.now().strftime("%H:%M:%S")
         self.error_text.append(f"[{ts}] {message}")
 
@@ -314,6 +325,8 @@ class MainWindow(QMainWindow):
         self.table.populate(self.cameras_cache)
 
     def _refresh_views_after_checks(self) -> None:
+        if self._closing:
+            return
         self._refresh_objects()
         self._refresh_cameras()
 
@@ -670,6 +683,8 @@ class MainWindow(QMainWindow):
         self._log(f"{log_prefix}: {len(enabled)} камер")
 
     def _on_camera_checked(self, result: CheckResult) -> None:
+        if self._closing:
+            return
         self.repo.update_camera_status(
             camera_id=result.camera_id,
             status=result.status,
@@ -757,13 +772,53 @@ class MainWindow(QMainWindow):
     # ==================================================================
 
     def closeEvent(self, event) -> None:
+        self._closing = True
+        self.timer.stop()
+        if getattr(self, "_git_check_timer", None) is not None:
+            self._git_check_timer.stop()
+        self._refresh_debounce.stop()
+
+        self._disconnect_background_slots()
+        pool = QThreadPool.globalInstance()
+        if not pool.waitForDone(THREADPOOL_SHUTDOWN_WAIT_MS):
+            _log.warning(
+                "При закрытии QThreadPool не освободился за %s мс — принудительно очищаем",
+                THREADPOOL_SHUTDOWN_WAIT_MS,
+            )
+            pool.clear()
+
         try:
             killed = self.ffplay.terminate_all()
             if killed:
-                self._log(f"Закрыто окон ffplay: {killed}")
+                _log.info("Закрыто окон ffplay: %s", killed)
         except Exception as exc:
-            self._log(f"Не удалось закрыть ffplay: {exc}")
+            _log.warning("Не удалось закрыть ffplay: %s", exc)
         super().closeEvent(event)
+
+    def _disconnect_background_slots(self) -> None:
+        for sig, slot in ((self.checker.camera_checked, self._on_camera_checked),):
+            try:
+                sig.disconnect(slot)
+            except TypeError:
+                pass
+        if self._git_service is not None:
+            for sig, slot in (
+                (self._git_service.finished, self._on_git_pull_done),
+                (self._git_service.updates_checked, self._on_git_updates_checked),
+            ):
+                try:
+                    sig.disconnect(slot)
+                except TypeError:
+                    pass
+        if self._release_service is not None:
+            for sig, slot in (
+                (self._release_service.version_checked, self._on_remote_version_checked),
+                (self._release_service.install_finished, self._on_release_install_done),
+            ):
+                try:
+                    sig.disconnect(slot)
+                except TypeError:
+                    pass
 
     # ==================================================================
     # GitHub: фоновая проверка обновлений + ручной pull + автоперезапуск
@@ -809,6 +864,8 @@ class MainWindow(QMainWindow):
             svc.check_updates()
 
     def _on_remote_version_checked(self, remote: str, is_newer: bool, error: str) -> None:
+        if self._closing:
+            return
         if error:
             self._log(f"github: проверка версии не удалась — {error}")
             return
@@ -817,6 +874,8 @@ class MainWindow(QMainWindow):
         self._apply_git_btn_state()
 
     def _on_git_updates_checked(self, count: int, message: str) -> None:
+        if self._closing:
+            return
         # count == -1 → ошибка проверки, не трогаем подсветку, но логируем тихо.
         if count < 0:
             self._log(f"git: фоновая проверка обновлений не удалась — {message}")
@@ -825,6 +884,8 @@ class MainWindow(QMainWindow):
         self._apply_git_btn_state()
 
     def _apply_git_btn_state(self) -> None:
+        if self._closing:
+            return
         count = self._pending_updates_count
         if count > 0:
             if config.IS_FROZEN and self._latest_remote_version:
@@ -919,6 +980,8 @@ class MainWindow(QMainWindow):
         self._ensure_release_service().install(release.dmg_url)
 
     def _on_release_install_done(self, ok: bool, message: str) -> None:
+        if self._closing:
+            return
         self.git_btn.setEnabled(True)
         if not ok:
             self._log_error(f"UPDATE: {message[:GIT_PULL_LOG_LIMIT]}")
@@ -944,6 +1007,8 @@ class MainWindow(QMainWindow):
             pass
 
     def _on_git_pull_done(self, ok: bool, message: str) -> None:
+        if self._closing:
+            return
         self.git_btn.setEnabled(True)
         text = message.strip()
         log_message = ("OK: " if ok else "ERROR: ") + text
