@@ -8,6 +8,10 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 from app import config
 
 
+def _git_bin() -> str | None:
+    return shutil.which("git") or ("/usr/bin/git" if shutil.which("/usr/bin/git") else None)
+
+
 class _PullJob(QRunnable):
     def __init__(self, finished_signal):
         super().__init__()
@@ -22,9 +26,25 @@ class _PullJob(QRunnable):
             pass
 
 
+class _CheckJob(QRunnable):
+    """Тихий фоновый job: только смотрит, есть ли новые коммиты в origin/main."""
+
+    def __init__(self, finished_signal):
+        super().__init__()
+        self._finished = finished_signal
+        self.setAutoDelete(True)
+
+    def run(self) -> None:
+        count, message = _do_check()
+        try:
+            self._finished.emit(int(count), str(message))
+        except RuntimeError:
+            pass
+
+
 def _do_pull() -> tuple[bool, str]:
-    git_bin = shutil.which("git") or "/usr/bin/git"
-    if not (git_bin and shutil.which(git_bin) or shutil.which("git")):
+    git_bin = _git_bin()
+    if not git_bin:
         return False, "git не найден в PATH. Установите Xcode Command Line Tools."
 
     project_dir = config.PROJECT_GIT_DIR
@@ -61,8 +81,46 @@ def _do_pull() -> tuple[bool, str]:
     return (proc.returncode == 0), output or f"код {proc.returncode}"
 
 
+def _do_check() -> tuple[int, str]:
+    """Возвращает (количество_коммитов_впереди, сообщение_или_ошибка).
+
+    -1 как количество означает «не удалось проверить» (сетевая ошибка / нет
+    git / нет репозитория) — UI в этом случае ничего не подсвечивает.
+    """
+    git_bin = _git_bin()
+    if not git_bin:
+        return -1, "git не найден"
+    project_dir = config.PROJECT_GIT_DIR
+    if project_dir is None:
+        return -1, "нет .git"
+    try:
+        subprocess.run(
+            [git_bin, "-C", str(project_dir), "fetch", "--prune", "origin", "main"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+        proc = subprocess.run(
+            [git_bin, "-C", str(project_dir), "rev-list", "--count", "HEAD..origin/main"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+        count = int((proc.stdout or "0").strip() or "0")
+        return count, "ok"
+    except subprocess.TimeoutExpired:
+        return -1, "git fetch: таймаут"
+    except subprocess.CalledProcessError as exc:
+        return -1, f"git: {exc.stderr or exc.stdout or exc}"
+    except Exception as exc:
+        return -1, f"git: {exc}"
+
+
 class GitPullService(QObject):
     finished = Signal(bool, str)
+    updates_checked = Signal(int, str)  # (count, message); count == -1 → ошибка
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -70,3 +128,6 @@ class GitPullService(QObject):
 
     def start(self) -> None:
         self._pool.start(_PullJob(self.finished))
+
+    def check_updates(self) -> None:
+        self._pool.start(_CheckJob(self.updates_checked))

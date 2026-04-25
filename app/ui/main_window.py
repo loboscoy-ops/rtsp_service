@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import traceback
 from datetime import datetime
+from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import Qt, QTimer
@@ -36,8 +38,11 @@ from app.ui.constants import (
     CHECK_TIMER_MIN_INTERVAL_SEC,
     ERROR_PANE_QSS,
     FFPLAY_FOCUS_DELAY_MS,
+    GIT_BTN_HAS_UPDATES_QSS,
     GIT_PULL_DIALOG_LIMIT,
     GIT_PULL_LOG_LIMIT,
+    GIT_UPDATE_CHECK_INTERVAL_MS,
+    GIT_UPDATE_FIRST_CHECK_DELAY_MS,
     LOG_PANE_MAX_HEIGHT,
     LOG_SPLITTER_DEFAULT_SIZES,
     LOGO_HEIGHT_PX,
@@ -95,6 +100,7 @@ class MainWindow(QMainWindow):
         self._refresh_debounce.timeout.connect(self._refresh_views_after_checks)
 
         self._setup_shortcuts()
+        self._setup_git_update_watcher()
 
     # ==================================================================
     # UI assembly
@@ -129,6 +135,8 @@ class MainWindow(QMainWindow):
             toolbar, "Обновить из GitHub", self._git_pull_from_github,
             tooltip="git pull --ff-only origin main",
         )
+        self._git_btn_default_style = self.git_btn.styleSheet()
+        self._pending_updates_count = 0
         self._add_toolbar_button(
             toolbar,
             "Карта",
@@ -750,6 +758,58 @@ class MainWindow(QMainWindow):
             self._log(f"Не удалось закрыть ffplay: {exc}")
         super().closeEvent(event)
 
+    # ==================================================================
+    # GitHub: фоновая проверка обновлений + ручной pull + автоперезапуск
+    # ==================================================================
+
+    def _ensure_git_service(self) -> Optional[GitPullService]:
+        if config.PROJECT_GIT_DIR is None:
+            return None
+        if self._git_service is None:
+            self._git_service = GitPullService(self)
+            self._git_service.finished.connect(self._on_git_pull_done)
+            self._git_service.updates_checked.connect(self._on_git_updates_checked)
+        return self._git_service
+
+    def _setup_git_update_watcher(self) -> None:
+        # Если репозиторий не клонирован — фоновая проверка не имеет смысла,
+        # кнопка по нажатию покажет инструкцию.
+        if self._ensure_git_service() is None:
+            return
+        self._git_check_timer = QTimer(self)
+        self._git_check_timer.setInterval(GIT_UPDATE_CHECK_INTERVAL_MS)
+        self._git_check_timer.timeout.connect(self._check_git_updates)
+        self._git_check_timer.start()
+        QTimer.singleShot(GIT_UPDATE_FIRST_CHECK_DELAY_MS, self._check_git_updates)
+
+    def _check_git_updates(self) -> None:
+        svc = self._ensure_git_service()
+        if svc is not None:
+            svc.check_updates()
+
+    def _on_git_updates_checked(self, count: int, message: str) -> None:
+        # count == -1 → ошибка проверки, не трогаем подсветку, но логируем тихо.
+        if count < 0:
+            self._log(f"git: фоновая проверка обновлений не удалась — {message}")
+            return
+        self._pending_updates_count = count
+        self._apply_git_btn_state()
+
+    def _apply_git_btn_state(self) -> None:
+        count = self._pending_updates_count
+        if count > 0:
+            label = f"Обновить из GitHub ● {count}"
+            self.git_btn.setText(label)
+            self.git_btn.setStyleSheet(GIT_BTN_HAS_UPDATES_QSS)
+            self.git_btn.setToolTip(
+                f"Доступно новых коммитов в origin/main: {count}\n"
+                "Нажмите, чтобы выполнить git pull --ff-only"
+            )
+        else:
+            self.git_btn.setText("Обновить из GitHub")
+            self.git_btn.setStyleSheet(self._git_btn_default_style)
+            self.git_btn.setToolTip("git pull --ff-only origin main")
+
     def _git_pull_from_github(self) -> None:
         if config.PROJECT_GIT_DIR is None:
             QMessageBox.information(
@@ -763,12 +823,12 @@ class MainWindow(QMainWindow):
             )
             return
 
-        if self._git_service is None:
-            self._git_service = GitPullService(self)
-            self._git_service.finished.connect(self._on_git_pull_done)
+        svc = self._ensure_git_service()
+        if svc is None:
+            return
         self.git_btn.setEnabled(False)
         self._log(f"git pull в {config.PROJECT_GIT_DIR}...")
-        self._git_service.start()
+        svc.start()
 
     def _on_git_pull_done(self, ok: bool, message: str) -> None:
         self.git_btn.setEnabled(True)
@@ -779,9 +839,75 @@ class MainWindow(QMainWindow):
             self._log_error(f"GIT PULL: {text[:GIT_PULL_LOG_LIMIT]}")
             QMessageBox.warning(self, "GitHub", text or "Не удалось обновить из GitHub")
             return
-        QMessageBox.information(
+
+        had_updates = self._pending_updates_count > 0
+        self._pending_updates_count = 0
+        self._apply_git_btn_state()
+
+        if not had_updates and "Already up to date" in text:
+            # Кодовая база и так была актуальна — перезапуск не нужен.
+            QMessageBox.information(
+                self, "GitHub",
+                "Уже актуальная версия — обновлять нечего.\n\n"
+                + text[:GIT_PULL_DIALOG_LIMIT],
+            )
+            return
+
+        resp = QMessageBox.question(
             self, "GitHub",
             "Обновление из GitHub выполнено.\n\n"
             + text[:GIT_PULL_DIALOG_LIMIT]
-            + "\n\nДля применения новых изменений перезапустите приложение.",
+            + "\n\nПерезапустить приложение сейчас, чтобы применить изменения?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
         )
+        if resp == QMessageBox.StandardButton.Yes:
+            self._restart_app()
+
+    def _restart_app(self) -> None:
+        """Стартует свежую копию приложения и закрывает текущую.
+
+        - Frozen .app: `open -n -a /Applications/RTSP Camera Monitor.app`
+        - Dev (`python -m app.main`): запускаем тот же интерпретатор.
+        """
+        try:
+            self.ffplay.terminate_all()
+        except Exception:
+            pass
+
+        try:
+            if config.IS_FROZEN:
+                exe = Path(sys.executable)
+                bundle = next(
+                    (p for p in exe.parents if p.suffix == ".app"),
+                    None,
+                )
+                if bundle is not None:
+                    subprocess.Popen(
+                        ["open", "-n", "-a", str(bundle)],
+                        start_new_session=True,
+                    )
+                else:
+                    subprocess.Popen([str(exe)], start_new_session=True)
+            else:
+                subprocess.Popen(
+                    [sys.executable, "-m", "app.main"],
+                    cwd=str(config.ROOT_DIR),
+                    start_new_session=True,
+                )
+        except Exception as exc:
+            self._log_error(f"RESTART: {exc}")
+            QMessageBox.warning(
+                self, "Перезапуск",
+                f"Не удалось перезапустить автоматически: {exc}\n"
+                "Закройте окно и откройте приложение вручную.",
+            )
+            return
+
+        # Даём событийному циклу 100 мс, чтобы новый процесс успел стартовать
+        # до того, как мы убьём текущий (важно для PyInstaller-bootstrap).
+        QTimer.singleShot(100, self._quit_app)
+
+    def _quit_app(self) -> None:
+        from PySide6.QtWidgets import QApplication
+        QApplication.instance().quit()
