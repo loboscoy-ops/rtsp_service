@@ -18,9 +18,11 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -41,7 +43,10 @@ RELEASES_TAG_URL_TMPL = f"https://api.github.com/repos/{REPO_SLUG}/releases/tags
 RELEASES_PAGE_URL = f"https://github.com/{REPO_SLUG}/releases"
 
 USER_AGENT = f"rtsp-camera-monitor/{config.APP_VERSION}"
-HTTP_TIMEOUT_SEC = 15
+# GitHub по HTTPS на медленных/фильтруемых сетях часто не успевает за 15 с (SSL handshake).
+HTTP_TIMEOUT_SEC = int(os.getenv("RTSP_HTTP_TIMEOUT_SEC", "60"))
+HTTP_CONNECT_RETRIES = max(1, int(os.getenv("RTSP_HTTP_CONNECT_RETRIES", "3")))
+HTTP_RETRY_BASE_DELAY_SEC = float(os.getenv("RTSP_HTTP_RETRY_DELAY_SEC", "2.0"))
 DOWNLOAD_TIMEOUT_SEC = 600
 
 _VERSION_RE = re.compile(r'^APP_VERSION\s*=\s*[\'"]([^\'"]+)[\'"]', re.MULTILINE)
@@ -88,13 +93,52 @@ def is_newer(remote: str, local: str) -> bool:
 # --- сетевые вызовы --------------------------------------------------------
 
 
-def _http_get(url: str, accept: Optional[str] = None, timeout: int = HTTP_TIMEOUT_SEC) -> bytes:
+def _format_fetch_error(exc: Exception) -> str:
+    """Краткое сообщение для UI; техподробности урезаем."""
+    raw = str(exc).strip()
+    low = raw.lower()
+    if "handshake" in low or "_ssl.c" in low:
+        return (
+            "Не удалось установить защищённое соединение с GitHub (таймаут SSL). "
+            "Проверьте интернет, VPN, прокси или файрвол; позже повторите проверку обновлений.\n\n"
+            f"Подробности: {raw[:280]}"
+        )
+    if "timed out" in low or "timeout" in low:
+        return (
+            "Превышено время ожидания ответа от GitHub. Сеть может быть перегружена или недоступна.\n\n"
+            f"Подробности: {raw[:280]}"
+        )
+    if "certificate" in low or "ssl" in low:
+        return (
+            "Ошибка проверки SSL-сертификата при обращении к GitHub.\n\n"
+            f"Подробности: {raw[:280]}"
+        )
+    if "name or service not known" in low or "getaddrinfo failed" in low:
+        return "Не удалось разрешить имя сервера GitHub (DNS). Проверьте доступ в интернет."
+    return raw[:500] if raw else repr(exc)
+
+
+def _http_get(url: str, accept: Optional[str] = None, timeout: Optional[int] = None) -> bytes:
+    """GET с несколькими попытками при обрыве соединения / таймауте."""
+    deadline = timeout if timeout is not None else HTTP_TIMEOUT_SEC
     headers = {"User-Agent": USER_AGENT}
     if accept:
         headers["Accept"] = accept
     req = Request(url, headers=headers)
-    with urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+
+    last_exc: Exception | None = None
+    for attempt in range(HTTP_CONNECT_RETRIES):
+        try:
+            with urlopen(req, timeout=deadline) as resp:
+                return resp.read()
+        except HTTPError:
+            raise
+        except (URLError, TimeoutError, OSError, socket.timeout) as exc:
+            last_exc = exc
+            if attempt < HTTP_CONNECT_RETRIES - 1:
+                time.sleep(HTTP_RETRY_BASE_DELAY_SEC * (attempt + 1))
+    assert last_exc is not None
+    raise last_exc
 
 
 def fetch_remote_version() -> RemoteVersion:
@@ -102,8 +146,21 @@ def fetch_remote_version() -> RemoteVersion:
     local = config.APP_VERSION
     try:
         body = _http_get(RAW_CONFIG_URL).decode("utf-8", errors="replace")
-    except (HTTPError, URLError, TimeoutError, OSError) as exc:
-        return RemoteVersion(version="", is_newer=False, local=local, error=str(exc))
+    except HTTPError as exc:
+        return RemoteVersion(
+            version="", is_newer=False, local=local,
+            error=_format_fetch_error(exc),
+        )
+    except (URLError, TimeoutError, OSError, socket.timeout) as exc:
+        return RemoteVersion(
+            version="", is_newer=False, local=local,
+            error=_format_fetch_error(exc),
+        )
+    except Exception as exc:
+        return RemoteVersion(
+            version="", is_newer=False, local=local,
+            error=_format_fetch_error(exc),
+        )
     m = _VERSION_RE.search(body)
     if not m:
         return RemoteVersion(
@@ -141,7 +198,7 @@ def fetch_release_by_tag(version_or_tag: str) -> Optional[ReleaseAsset]:
         if exc.code == 404:
             return None
         return None
-    except (URLError, TimeoutError, OSError):
+    except (URLError, TimeoutError, OSError, socket.timeout):
         return None
     try:
         data = json.loads(body.decode("utf-8", errors="replace"))
@@ -154,7 +211,7 @@ def fetch_latest_release() -> Optional[ReleaseAsset]:
     """Достаёт последний релиз и ссылку на .dmg-asset (если есть)."""
     try:
         raw = _http_get(RELEASES_LATEST_URL, accept="application/vnd.github+json")
-    except (HTTPError, URLError, TimeoutError, OSError):
+    except (HTTPError, URLError, TimeoutError, OSError, socket.timeout):
         return None
     try:
         data = json.loads(raw.decode("utf-8", errors="replace"))
@@ -264,9 +321,24 @@ def download_to_temp(url: str) -> Path:
     os.close(fd)
     target = Path(name)
     req = Request(url, headers={"User-Agent": USER_AGENT})
-    with urlopen(req, timeout=DOWNLOAD_TIMEOUT_SEC) as resp, open(target, "wb") as out:
-        shutil.copyfileobj(resp, out, length=1024 * 1024)
-    return target
+    last_exc: Exception | None = None
+    for attempt in range(HTTP_CONNECT_RETRIES):
+        try:
+            with urlopen(req, timeout=DOWNLOAD_TIMEOUT_SEC) as resp, open(target, "wb") as out:
+                shutil.copyfileobj(resp, out, length=1024 * 1024)
+            return target
+        except HTTPError:
+            raise
+        except (URLError, TimeoutError, OSError, socket.timeout) as exc:
+            last_exc = exc
+            try:
+                target.unlink(missing_ok=True)
+            except OSError:
+                pass
+            if attempt < HTTP_CONNECT_RETRIES - 1:
+                time.sleep(HTTP_RETRY_BASE_DELAY_SEC * (attempt + 1))
+    assert last_exc is not None
+    raise last_exc
 
 
 # --- Qt-обёртка ------------------------------------------------------------
