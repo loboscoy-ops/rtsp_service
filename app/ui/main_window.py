@@ -736,7 +736,9 @@ class MainWindow(QMainWindow):
         obj = self._selected_object()
         label = obj.name if obj else "объект не выбран"
         try:
-            MapDialog(self.cameras_cache, object_label=label, parent=self).exec()
+            dlg = MapDialog(self.cameras_cache, object_label=label, parent=self)
+            dlg.open_camera_requested.connect(self._open_camera_stream)
+            dlg.exec()
         except Exception as exc:
             tb = traceback.format_exc()
             self._log(f"Ошибка открытия карты: {exc}")
