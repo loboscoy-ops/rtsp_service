@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QSplitter,
     QStatusBar,
@@ -85,6 +86,8 @@ class MainWindow(QMainWindow):
         self._release_service: Optional[ReleaseService] = None
         self._latest_remote_version: Optional[str] = None
         self._closing = False
+        self._update_progress: Optional[QProgressDialog] = None
+        self._update_target_tag: Optional[str] = None
 
         self.current_object_id: Optional[int] = None
         self.objects_cache: list[ObjectModel] = []
@@ -817,6 +820,8 @@ class MainWindow(QMainWindow):
             for sig, slot in (
                 (self._release_service.version_checked, self._on_remote_version_checked),
                 (self._release_service.install_finished, self._on_release_install_done),
+                (self._release_service.download_progress, self._on_release_download_progress),
+                (self._release_service.install_stage, self._on_release_install_stage),
             ):
                 try:
                     sig.disconnect(slot)
@@ -841,6 +846,8 @@ class MainWindow(QMainWindow):
             self._release_service = ReleaseService(self)
             self._release_service.version_checked.connect(self._on_remote_version_checked)
             self._release_service.install_finished.connect(self._on_release_install_done)
+            self._release_service.download_progress.connect(self._on_release_download_progress)
+            self._release_service.install_stage.connect(self._on_release_install_stage)
         return self._release_service
 
     def _setup_git_update_watcher(self) -> None:
@@ -988,11 +995,86 @@ class MainWindow(QMainWindow):
         self.git_btn.setEnabled(False)
         self.git_btn.setText("Скачивание .dmg…")
         self._log(f"Скачиваю .dmg для v{release.tag}: {release.dmg_url}")
+        self._update_target_tag = release.tag
+        self._show_update_progress(release.tag)
         self._ensure_release_service().install(release.dmg_url)
+
+    def _show_update_progress(self, tag: str) -> None:
+        # Закрываем старый, если остался от предыдущей попытки.
+        self._close_update_progress()
+        dlg = QProgressDialog(
+            f"Подключение к GitHub для скачивания v{tag}…",
+            "",  # пустая подпись = без кнопки Cancel
+            0, 100, self,
+        )
+        dlg.setWindowTitle("Обновление")
+        dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.setCancelButton(None)
+        dlg.setValue(0)
+        dlg.show()
+        self._update_progress = dlg
+
+    def _close_update_progress(self) -> None:
+        if self._update_progress is not None:
+            try:
+                self._update_progress.close()
+            except RuntimeError:
+                pass
+            self._update_progress = None
+
+    @staticmethod
+    def _format_bytes(num: int) -> str:
+        if num < 0:
+            return "—"
+        for unit in ("B", "KB", "MB", "GB"):
+            if num < 1024 or unit == "GB":
+                return f"{num:.1f} {unit}" if unit != "B" else f"{num} B"
+            num /= 1024.0
+        return f"{num:.1f} GB"
+
+    def _on_release_download_progress(self, downloaded: int, total: int) -> None:
+        if self._closing or self._update_progress is None:
+            return
+        tag = self._update_target_tag or ""
+        if total > 0:
+            percent = max(0, min(100, int(downloaded * 100 / total)))
+            self._update_progress.setRange(0, 100)
+            self._update_progress.setValue(percent)
+            self._update_progress.setLabelText(
+                f"Скачивание v{tag}: {percent}% "
+                f"({self._format_bytes(downloaded)} из {self._format_bytes(total)})"
+            )
+        else:
+            # Сервер не отдал Content-Length — крутим бесконечный индикатор.
+            self._update_progress.setRange(0, 0)
+            self._update_progress.setLabelText(
+                f"Скачивание v{tag}: {self._format_bytes(downloaded)}"
+            )
+
+    def _on_release_install_stage(self, stage: str) -> None:
+        if self._closing or self._update_progress is None:
+            return
+        tag = self._update_target_tag or ""
+        if stage == "install":
+            self._update_progress.setRange(0, 0)
+            self._update_progress.setLabelText(
+                f"Установка v{tag} в /Applications…"
+            )
+        elif stage == "download":
+            self._update_progress.setRange(0, 100)
+            self._update_progress.setValue(0)
+            self._update_progress.setLabelText(
+                f"Скачивание v{tag}: подключение к серверу…"
+            )
 
     def _on_release_install_done(self, ok: bool, message: str) -> None:
         if self._closing:
             return
+        self._close_update_progress()
+        self._update_target_tag = None
         self.git_btn.setEnabled(True)
         if not ok:
             self._log_error(f"UPDATE: {message[:GIT_PULL_LOG_LIMIT]}")

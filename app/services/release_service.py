@@ -316,7 +316,15 @@ def install_dmg(dmg_path: Path) -> tuple[bool, str]:
         )
 
 
-def download_to_temp(url: str) -> Path:
+_PROGRESS_CHUNK = 256 * 1024  # 256 KB — достаточно частые тики UI без лишней нагрузки
+
+
+def download_to_temp(url: str, progress_cb=None) -> Path:
+    """Скачивает url во временный файл, опционально отдавая прогресс.
+
+    progress_cb(bytes_downloaded, total_bytes_or_minus_one) вызывается
+    из этого же потока. Если сервер не отдал Content-Length, total = -1.
+    """
     fd, name = tempfile.mkstemp(suffix=".dmg", prefix="rtsp-update-")
     os.close(fd)
     target = Path(name)
@@ -325,7 +333,28 @@ def download_to_temp(url: str) -> Path:
     for attempt in range(HTTP_CONNECT_RETRIES):
         try:
             with urlopen(req, timeout=DOWNLOAD_TIMEOUT_SEC) as resp, open(target, "wb") as out:
-                shutil.copyfileobj(resp, out, length=1024 * 1024)
+                length_header = resp.headers.get("Content-Length") if hasattr(resp, "headers") else None
+                try:
+                    total = int(length_header) if length_header else -1
+                except (TypeError, ValueError):
+                    total = -1
+                downloaded = 0
+                if progress_cb is not None:
+                    try:
+                        progress_cb(0, total)
+                    except Exception:
+                        pass
+                while True:
+                    chunk = resp.read(_PROGRESS_CHUNK)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    downloaded += len(chunk)
+                    if progress_cb is not None:
+                        try:
+                            progress_cb(downloaded, total)
+                        except Exception:
+                            pass
             return target
         except HTTPError:
             raise
@@ -359,18 +388,22 @@ class _CheckJob(QRunnable):
 
 
 class _InstallJob(QRunnable):
-    def __init__(self, dmg_url: str, finished_signal):
+    def __init__(self, dmg_url: str, progress_signal, stage_signal, finished_signal):
         super().__init__()
         self._url = dmg_url
+        self._progress = progress_signal
+        self._stage = stage_signal
         self._finished = finished_signal
         self.setAutoDelete(True)
 
     def run(self) -> None:
+        self._safe_emit(self._stage, "download")
         try:
-            dmg = download_to_temp(self._url)
+            dmg = download_to_temp(self._url, progress_cb=self._on_progress)
         except Exception as exc:
-            self._emit(False, f"download: {exc}")
+            self._safe_emit(self._finished, False, f"download: {exc}")
             return
+        self._safe_emit(self._stage, "install")
         try:
             ok, msg = install_dmg(dmg)
         finally:
@@ -378,12 +411,17 @@ class _InstallJob(QRunnable):
                 dmg.unlink(missing_ok=True)
             except Exception:
                 pass
-        self._emit(ok, msg)
+        self._safe_emit(self._finished, bool(ok), str(msg))
 
-    def _emit(self, ok: bool, msg: str) -> None:
+    def _on_progress(self, downloaded: int, total: int) -> None:
+        self._safe_emit(self._progress, int(downloaded), int(total))
+
+    @staticmethod
+    def _safe_emit(signal, *args) -> None:
         try:
-            self._finished.emit(bool(ok), str(msg))
+            signal.emit(*args)
         except RuntimeError:
+            # Получатель уничтожен (закрытие приложения) — молча.
             pass
 
 
@@ -391,6 +429,8 @@ class ReleaseService(QObject):
     """Фоновая проверка версии и установка .dmg для собранного .app."""
 
     version_checked = Signal(str, bool, str)   # (remote_version, is_newer, error_message)
+    download_progress = Signal(int, int)       # (bytes_downloaded, total_or_-1)
+    install_stage = Signal(str)                # "download" | "install"
     install_finished = Signal(bool, str)       # (ok, message)
 
     def __init__(self, parent: QObject | None = None) -> None:
@@ -401,4 +441,11 @@ class ReleaseService(QObject):
         self._pool.start(_CheckJob(self.version_checked))
 
     def install(self, dmg_url: str) -> None:
-        self._pool.start(_InstallJob(dmg_url, self.install_finished))
+        self._pool.start(
+            _InstallJob(
+                dmg_url,
+                self.download_progress,
+                self.install_stage,
+                self.install_finished,
+            )
+        )
