@@ -339,7 +339,14 @@ class MainWindow(QMainWindow):
         if self._closing or not hasattr(self, "error_text"):
             return
         lines: list[str] = []
-        for cam_id in sorted(self._camera_errors):
+        for cam_id in sorted(
+            self._camera_errors,
+            key=lambda cid: (
+                0,
+                (self._camera_table_row_num(cid) or 10**9),
+                cid,
+            ),
+        ):
             lines.append(self._camera_errors[cam_id])
         if self._misc_errors:
             if lines:
@@ -348,13 +355,25 @@ class MainWindow(QMainWindow):
             lines.extend(self._misc_errors)
         self.error_text.setPlainText("\n".join(lines))
 
-    @staticmethod
-    def _format_camera_error(cam, camera_id: int) -> str:
+    def _camera_table_row_num(self, camera_id: int) -> Optional[int]:
+        """Позиция камеры в текущей таблице (колонка «№»), 1-based."""
+        for idx, c in enumerate(self.cameras_cache):
+            if c.id == camera_id:
+                return idx + 1
+        return None
+
+    def _camera_row_label(self, camera_id: int) -> str:
+        """Подпись для логов: табличный №, иначе внутренний id БД."""
+        n = self._camera_table_row_num(camera_id)
+        return f"№ {n}" if n is not None else f"id {camera_id}"
+
+    def _format_camera_error(self, cam: Optional[CameraModel], camera_id: int) -> str:
+        label = self._camera_row_label(camera_id)
         if cam is None:
-            return f"— - камера #{camera_id} (№ {camera_id})"
+            return f"— - камера ({label})"
         obj = cam.object_name or "—"
         name = cam.camera_name or "—"
-        return f"{obj} - {name} (№ {camera_id})"
+        return f"{obj} - {name} ({label})"
 
     def _set_camera_error(self, camera_id: int, line: str) -> None:
         """Обновить запись об ошибке для камеры (без дублей)."""
@@ -703,7 +722,10 @@ class MainWindow(QMainWindow):
         if not result.ok:
             err = result.error or "Не удалось открыть поток"
             QMessageBox.warning(self, "FFplay", err)
-            self._log_error(f"FFPLAY: {cam.object_name} / {cam.camera_name} — {err}")
+            self._log_error(
+                f"FFPLAY: {cam.object_name} - {cam.camera_name} "
+                f"({self._camera_row_label(cam.id)}) — {err}"
+            )
             return
         self._log(f"Открыт поток: {cam.camera_name}")
         self.lower()
@@ -736,7 +758,7 @@ class MainWindow(QMainWindow):
         if not cam:
             return
         self.checker.check_camera(cam)
-        self._log(f"Проверка камеры: {cam.camera_name}")
+        self._log(f"Проверка камеры {self._camera_row_label(cam.id)}: {cam.camera_name}")
 
     def _manual_check_all(self) -> None:
         self._run_check_all_enabled("Запущена ручная проверка всех объектов")
@@ -764,8 +786,9 @@ class MainWindow(QMainWindow):
         )
         cam = self.repo.get_camera(result.camera_id)
         ping_part = self._format_ping_part(result.ping_ok, result.ping_ms)
+        row_lbl = self._camera_row_label(result.camera_id)
         self._log(
-            f"Проверка завершена camera_id={result.camera_id}: {result.status}"
+            f"Проверка завершена {row_lbl}: {result.status}"
             + (f" ({result.error})" if result.error else "")
             + ping_part
         )
