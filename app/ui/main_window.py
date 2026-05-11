@@ -12,6 +12,7 @@ from typing import Callable, Optional
 from PySide6.QtCore import Qt, QThreadPool, QTimer
 from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QInputDialog,
     QLabel,
@@ -70,6 +71,7 @@ from app.ui.dialogs.object_dialog import ObjectDialog
 from app.ui.widgets.camera_map import CameraMapView
 from app.ui.widgets.camera_table import CameraTable
 from app.ui.widgets.object_sidebar import ObjectSidebar
+from app.utils.process_utils import terminate_ffprobe_children
 from app.utils.validators import mask_rtsp_url
 
 _log = logging.getLogger(__name__)
@@ -878,7 +880,19 @@ class MainWindow(QMainWindow):
         self._refresh_debounce.stop()
 
         self._disconnect_background_slots()
+
         pool = QThreadPool.globalInstance()
+        # Не ждать десятки зависших ffprobe: снимаем очередь иронов и рвём блокирующие probes.
+        pool.clear()
+
+        if hasattr(self, "map_view"):
+            self.map_view.prepare_shutdown()
+            QApplication.processEvents()
+
+        n_probe = terminate_ffprobe_children()
+        if n_probe:
+            _log.info("При выходе завершено процессов ffprobe: %s", n_probe)
+
         if not pool.waitForDone(THREADPOOL_SHUTDOWN_WAIT_MS):
             _log.warning(
                 "При закрытии QThreadPool не освободился за %s мс — принудительно очищаем",

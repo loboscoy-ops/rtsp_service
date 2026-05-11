@@ -45,10 +45,10 @@ FFPLAY_FOCUS_DELAY_MS = 300
 GIT_UPDATE_CHECK_INTERVAL_MS = 10 * 60 * 1000   # 10 минут
 GIT_UPDATE_FIRST_CHECK_DELAY_MS = 3000          # первая проверка через 3 секунды после старта
 
-# Ожидание фоновых QRunnable (проверки камер, git, импорт) при закрытии окна.
-# До 120 c у ffprobe на «длинной» проверке — даём запас, иначе Qt ругается
-# «QThreadPool destroyed while threads are still running».
-THREADPOOL_SHUTDOWN_WAIT_MS = 130_000
+# Ожидание уже запущенных QRunnable при закрытии окна (секунды).
+# Очередь проверок при выходе снимается через pool.clear(), активные ffprobe
+# завершаются через terminate_ffprobe_children(); это окно — добежать коротким задачам.
+THREADPOOL_SHUTDOWN_WAIT_MS = 8_000
 
 # QSS для кнопки «Обновить из GitHub», когда есть новые коммиты.
 GIT_BTN_HAS_UPDATES_QSS = (

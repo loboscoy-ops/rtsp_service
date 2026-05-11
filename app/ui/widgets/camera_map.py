@@ -369,6 +369,27 @@ class CameraMapView(QWidget):
             return
         self._page.runJavaScript("window.fitAllMarkers && fitAllMarkers();")
 
+    def prepare_shutdown(self) -> None:
+        """Уменьшить краши Qt WebEngine при закрытии главного окна."""
+        try:
+            self.open_camera_requested.disconnect()
+        except TypeError:
+            pass
+        if self._page is not None:
+            try:
+                self._page.camera_open_requested.disconnect()
+            except TypeError:
+                pass
+        if self._view is None:
+            self._loaded = False
+            return
+        try:
+            self._view.stop()
+            self._view.setHtml("", QUrl("about:blank"))
+        except Exception:
+            pass
+        self._loaded = False
+
     # ------------------------------------------------------------------
     # internals
     # ------------------------------------------------------------------

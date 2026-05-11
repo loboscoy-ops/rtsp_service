@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import logging
+import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
+import sys
 from dataclasses import dataclass
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -68,4 +74,58 @@ def run_command(cmd: list[str], timeout_sec: int) -> ProcessResult:
         stdout=proc.stdout or "",
         stderr=proc.stderr or "",
     )
+
+
+def terminate_ffprobe_children() -> int:
+    """Отправить SIGTERM прямым дочерним процессам ffprobe текущего процесса.
+
+    Проверки камер блокируют поток QThreadPool внутри subprocess.run; при выходе
+    из приложения это иначе держит окно десятки секунд или провоцирует «не отвечает».
+    Затрагиваем только процессы, в командной строке которых есть ffprobe (не ffplay,
+    не QtWebEngineProcess).
+    """
+    if sys.platform == "win32":
+        return 0
+    ppid = str(os.getpid())
+    try:
+        proc = subprocess.run(
+            ["pgrep", "-P", ppid],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        _log.debug("terminate_ffprobe_children: pgrep не выполнен: %s", exc)
+        return 0
+    out = (proc.stdout or "").strip()
+    if not out:
+        return 0
+    killed = 0
+    for pid_str in out.splitlines():
+        pid_str = pid_str.strip()
+        if not pid_str.isdigit():
+            continue
+        pid = int(pid_str)
+        try:
+            ps = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "args="],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            continue
+        args = (ps.stdout or "").strip().lower()
+        if "ffprobe" not in args:
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+            killed += 1
+        except ProcessLookupError:
+            pass
+        except PermissionError as exc:
+            _log.debug("terminate_ffprobe_children: pid=%s %s", pid, exc)
+    return killed
 
