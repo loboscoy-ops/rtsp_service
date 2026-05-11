@@ -49,10 +49,10 @@ from app.ui.constants import (
     GIT_BTN_HAS_UPDATES_QSS,
     GIT_PULL_DIALOG_LIMIT,
     GIT_PULL_LOG_LIMIT,
+    BOTTOM_SPLITTER_DEFAULT_SIZES,
+    CAMERAS_SPLITTER_DEFAULT_SIZES,
     GIT_UPDATE_CHECK_INTERVAL_MS,
     GIT_UPDATE_FIRST_CHECK_DELAY_MS,
-    LOG_PANE_MAX_HEIGHT,
-    LOG_SPLITTER_DEFAULT_SIZES,
     LOGO_HEIGHT_PX,
     REFRESH_DEBOUNCE_MS,
     RIGHT_PANE_DEFAULT_WIDTH,
@@ -67,6 +67,7 @@ from app.ui.dialogs.camera_dialog import CameraDialog
 from app.ui.dialogs.import_dialog import ImportDialog
 from app.ui.dialogs.map_dialog import MapDialog
 from app.ui.dialogs.object_dialog import ObjectDialog
+from app.ui.widgets.camera_map import CameraMapView
 from app.ui.widgets.camera_table import CameraTable
 from app.ui.widgets.object_sidebar import ObjectSidebar
 from app.utils.validators import mask_rtsp_url
@@ -94,6 +95,13 @@ class MainWindow(QMainWindow):
         self.cameras_cache: list[CameraModel] = []
         self._sort_column = 0
         self._sort_order = Qt.SortOrder.AscendingOrder
+
+        # Текущий «снимок» ошибок камер (id → отрисованная строка).
+        # Дедуплицируется автоматически: повторные провалы той же камеры
+        # не дублируются, а уход в online — убирает запись.
+        self._camera_errors: dict[int, str] = {}
+        # Прочие разовые ошибки (FFPLAY/IMPORT/GIT…) — список с временем.
+        self._misc_errors: list[str] = []
 
         self.setWindowTitle(f"{config.APP_NAME} {config.APP_VERSION}")
         self.resize(*WINDOW_DEFAULT_SIZE)
@@ -209,37 +217,56 @@ class MainWindow(QMainWindow):
         return wrapper
 
     def _build_cameras_pane(self) -> QWidget:
-        wrapper = QWidget()
-        layout = QVBoxLayout(wrapper)
-        layout.addWidget(QLabel("Камеры"))
-        self.table = CameraTable()
-        layout.addWidget(self.table)
-        layout.addWidget(self._build_log_pane())
-        return wrapper
-
-    def _build_log_pane(self) -> QSplitter:
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self._build_log_panel("Лог", error=False))
-        splitter.addWidget(self._build_log_panel("Ошибки (с временем)", error=True))
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes(list(LOG_SPLITTER_DEFAULT_SIZES))
-        splitter.setMaximumHeight(LOG_PANE_MAX_HEIGHT)
+        # Вертикальный сплиттер: сверху таблица камер, снизу карта + ошибки.
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.addWidget(self._build_table_pane())
+        splitter.addWidget(self._build_bottom_pane())
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes(list(CAMERAS_SPLITTER_DEFAULT_SIZES))
+        splitter.setCollapsible(0, False)
+        splitter.setCollapsible(1, False)
         return splitter
 
-    def _build_log_panel(self, title: str, *, error: bool) -> QWidget:
+    def _build_table_pane(self) -> QWidget:
         wrapper = QWidget()
         layout = QVBoxLayout(wrapper)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(QLabel(title))
-        text_edit = QTextEdit()
-        text_edit.setReadOnly(True)
-        if error:
-            text_edit.setStyleSheet(ERROR_PANE_QSS)
-            self.error_text = text_edit
-        else:
-            self.log_text = text_edit
-        layout.addWidget(text_edit)
+        layout.addWidget(QLabel("Камеры"))
+        self.table = CameraTable()
+        layout.addWidget(self.table)
+        return wrapper
+
+    def _build_bottom_pane(self) -> QSplitter:
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(self._build_map_panel())
+        splitter.addWidget(self._build_errors_panel())
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes(list(BOTTOM_SPLITTER_DEFAULT_SIZES))
+        splitter.setCollapsible(0, False)
+        splitter.setCollapsible(1, False)
+        return splitter
+
+    def _build_map_panel(self) -> QWidget:
+        wrapper = QWidget()
+        layout = QVBoxLayout(wrapper)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(QLabel("Карта"))
+        self.map_view = CameraMapView(self)
+        self.map_view.open_camera_requested.connect(self._open_camera_stream)
+        layout.addWidget(self.map_view)
+        return wrapper
+
+    def _build_errors_panel(self) -> QWidget:
+        wrapper = QWidget()
+        layout = QVBoxLayout(wrapper)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(QLabel("Ошибки"))
+        self.error_text = QTextEdit()
+        self.error_text.setReadOnly(True)
+        self.error_text.setStyleSheet(ERROR_PANE_QSS)
+        layout.addWidget(self.error_text)
         return wrapper
 
     def _setup_logo(self) -> None:
@@ -292,18 +319,53 @@ class MainWindow(QMainWindow):
     # ==================================================================
 
     def _log(self, message: str) -> None:
+        # Окно «Лог» убрано — пишем в системный лог и в строку статуса.
+        _log.info("%s", message)
         if self._closing:
-            _log.info("%s", message)
             return
-        self.log_text.append(message)
         self.statusBar().showMessage(message, STATUS_BAR_MESSAGE_MS)
 
     def _log_error(self, message: str) -> None:
+        """Разовая ошибка не от проверки камер (FFPLAY/IMPORT/GIT…)."""
+        _log.warning("%s", message)
         if self._closing:
-            _log.warning("%s", message)
             return
         ts = datetime.now().strftime("%H:%M:%S")
-        self.error_text.append(f"[{ts}] {message}")
+        self._misc_errors.append(f"[{ts}] {message}")
+        self._render_errors_pane()
+
+    def _render_errors_pane(self) -> None:
+        """Перерисовать панель ошибок: дедуп по камерам + хронологические события."""
+        if self._closing or not hasattr(self, "error_text"):
+            return
+        lines: list[str] = []
+        for cam_id in sorted(self._camera_errors):
+            lines.append(self._camera_errors[cam_id])
+        if self._misc_errors:
+            if lines:
+                lines.append("")
+                lines.append("— События —")
+            lines.extend(self._misc_errors)
+        self.error_text.setPlainText("\n".join(lines))
+
+    @staticmethod
+    def _format_camera_error(cam, camera_id: int) -> str:
+        if cam is None:
+            return f"— - камера #{camera_id} (№ {camera_id})"
+        obj = cam.object_name or "—"
+        name = cam.camera_name or "—"
+        return f"{obj} - {name} (№ {camera_id})"
+
+    def _set_camera_error(self, camera_id: int, line: str) -> None:
+        """Обновить запись об ошибке для камеры (без дублей)."""
+        if self._camera_errors.get(camera_id) == line:
+            return
+        self._camera_errors[camera_id] = line
+        self._render_errors_pane()
+
+    def _clear_camera_error(self, camera_id: int) -> None:
+        if self._camera_errors.pop(camera_id, None) is not None:
+            self._render_errors_pane()
 
     # ==================================================================
     # data refresh
@@ -327,6 +389,8 @@ class MainWindow(QMainWindow):
         )
         self.cameras_cache = self._apply_sort(cameras)
         self.table.populate(self.cameras_cache)
+        if hasattr(self, "map_view"):
+            self.map_view.set_cameras(self.cameras_cache)
 
     def _refresh_views_after_checks(self) -> None:
         if self._closing:
@@ -699,18 +763,24 @@ class MainWindow(QMainWindow):
             last_ping_ms=result.ping_ms,
         )
         cam = self.repo.get_camera(result.camera_id)
-        cam_label = (
-            f"{cam.object_name} / {cam.camera_name}" if cam else f"camera_id={result.camera_id}"
-        )
         ping_part = self._format_ping_part(result.ping_ok, result.ping_ms)
         self._log(
             f"Проверка завершена camera_id={result.camera_id}: {result.status}"
             + (f" ({result.error})" if result.error else "")
             + ping_part
         )
-        if result.status != "online":
-            err_part = f" — {result.error}" if result.error else ""
-            self._log_error(f"{result.status.upper()}: {cam_label}{err_part}{ping_part}")
+        # Обновляем точечный маркер на карте без перерисовки.
+        if hasattr(self, "map_view"):
+            self.map_view.update_camera_status(result.camera_id, result.status)
+
+        # Дедупликация: запись по камере добавляется/убирается только тут,
+        # повторные проверки той же камеры не плодят дубли в панели «Ошибки».
+        if result.status == "online":
+            self._clear_camera_error(result.camera_id)
+        else:
+            self._set_camera_error(
+                result.camera_id, self._format_camera_error(cam, result.camera_id)
+            )
         if not self._refresh_debounce.isActive():
             self._refresh_debounce.start()
 

@@ -26,8 +26,10 @@ SIDEBAR_DEFAULT_WIDTH = 260
 SIDEBAR_MIN_WIDTH = 220
 RIGHT_PANE_DEFAULT_WIDTH = 1190
 
-LOG_PANE_MAX_HEIGHT = 220
-LOG_SPLITTER_DEFAULT_SIZES = (600, 600)
+# Стартовые размеры вертикального сплиттера: верх — таблица, низ — карта+ошибки.
+CAMERAS_SPLITTER_DEFAULT_SIZES = (520, 360)
+# Стартовые размеры нижнего горизонтального сплиттера: слева карта, справа ошибки.
+BOTTOM_SPLITTER_DEFAULT_SIZES = (820, 380)
 
 LOGO_HEIGHT_PX = 84
 STATUSBAR_PADDING_PX = 8

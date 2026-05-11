@@ -49,6 +49,7 @@ pyinstaller \
     --add-data "resources:resources" \
     --hidden-import PySide6.QtWebEngineWidgets \
     --hidden-import PySide6.QtWebEngineCore \
+    --hidden-import app.ui.widgets.camera_map \
     --osx-bundle-identifier "com.urus.rtsp-monitor" \
     "${ENTRY}"
 
