@@ -11,6 +11,36 @@ from pathlib import Path
 if sys.platform == "darwin":
     os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 
+
+def _ensure_qtwebengine_helper_path() -> None:
+    """В собранном .app PySide6 кладёт QtWebEngineProcess.app внутрь
+    `QtWebEngineCore.framework/Versions/Resources/Helpers/...`, а Qt ищет его
+    в `QtWebEngineCore.framework/Helpers/...`. Прописываем явный путь через
+    `QTWEBENGINEPROCESS_PATH`, иначе на macOS приложение падает с SIGABRT
+    при создании первого QWebEnginePage.
+    """
+    if not getattr(sys, "frozen", False) or sys.platform != "darwin":
+        return
+    if os.environ.get("QTWEBENGINEPROCESS_PATH"):
+        return
+    try:
+        bundle = Path(sys.executable).resolve().parents[1]  # .../Contents
+    except IndexError:
+        return
+    fw = bundle / "Frameworks" / "PySide6" / "Qt" / "lib" / "QtWebEngineCore.framework"
+    candidates = [
+        fw / "Helpers" / "QtWebEngineProcess.app" / "Contents" / "MacOS" / "QtWebEngineProcess",
+        fw / "Versions" / "A" / "Helpers" / "QtWebEngineProcess.app" / "Contents" / "MacOS" / "QtWebEngineProcess",
+        fw / "Versions" / "Resources" / "Helpers" / "QtWebEngineProcess.app" / "Contents" / "MacOS" / "QtWebEngineProcess",
+    ]
+    for path in candidates:
+        if path.exists():
+            os.environ["QTWEBENGINEPROCESS_PATH"] = str(path)
+            return
+
+
+_ensure_qtwebengine_helper_path()
+
 from PySide6.QtWidgets import QApplication
 
 from app import config

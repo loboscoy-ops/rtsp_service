@@ -59,6 +59,48 @@ if [[ ! -d "${APP_BUNDLE}" ]]; then
     exit 1
 fi
 
+# PySide6/PyInstaller на macOS кладёт QtWebEngineProcess.app и chromium-паки
+# в QtWebEngineCore.framework/Versions/Resources/{Helpers,Resources},
+# а корневые симлинки framework'а указывают на Versions/Current/* (их нет).
+# Без этого Qt падает с SIGABRT при инициализации QWebEnginePage.
+WEBENGINE_FW="${APP_BUNDLE}/Contents/Frameworks/PySide6/Qt/lib/QtWebEngineCore.framework"
+if [[ -d "${WEBENGINE_FW}" ]]; then
+    # Helpers
+    REAL_HELPERS=""
+    for cand in \
+        "${WEBENGINE_FW}/Versions/Resources/Helpers" \
+        "${WEBENGINE_FW}/Versions/A/Helpers"; do
+        if [[ -d "${cand}/QtWebEngineProcess.app" ]]; then
+            REAL_HELPERS="${cand#${WEBENGINE_FW}/}"
+            break
+        fi
+    done
+    if [[ -n "${REAL_HELPERS}" ]]; then
+        rm -f "${WEBENGINE_FW}/Helpers"
+        ln -s "${REAL_HELPERS}" "${WEBENGINE_FW}/Helpers"
+        echo "▶ QtWebEngineCore.framework/Helpers → ${REAL_HELPERS}"
+    else
+        echo "⚠  Не нашёл QtWebEngineProcess.app в QtWebEngineCore.framework"
+    fi
+    # Resources (.pak / icudtl.dat / qtwebengine_locales)
+    REAL_RES=""
+    for cand in \
+        "${WEBENGINE_FW}/Versions/Resources/Resources" \
+        "${WEBENGINE_FW}/Versions/A/Resources"; do
+        if [[ -f "${cand}/qtwebengine_resources.pak" ]]; then
+            REAL_RES="${cand#${WEBENGINE_FW}/}"
+            break
+        fi
+    done
+    if [[ -n "${REAL_RES}" ]]; then
+        rm -f "${WEBENGINE_FW}/Resources"
+        ln -s "${REAL_RES}" "${WEBENGINE_FW}/Resources"
+        echo "▶ QtWebEngineCore.framework/Resources → ${REAL_RES}"
+    else
+        echo "⚠  Не нашёл qtwebengine_resources.pak в QtWebEngineCore.framework"
+    fi
+fi
+
 echo "▶ Готовлю DMG: ${DMG_NAME}"
 DMG_PATH="dist/${DMG_NAME}"
 rm -f "${DMG_PATH}"
