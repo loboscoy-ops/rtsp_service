@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
     QComboBox,
+    QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
@@ -291,12 +292,38 @@ class MainWindow(QMainWindow):
         wrapper = QWidget()
         layout = QVBoxLayout(wrapper)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(QLabel("Ошибки"))
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.addWidget(QLabel("Ошибки"))
+        header.addStretch(1)
+        self.errors_clear_btn = QPushButton("Очистить")
+        self.errors_clear_btn.setToolTip(
+            "Скрыть все текущие записи в панели «Ошибки». "
+            "При следующей проверке камер актуальные ошибки появятся снова."
+        )
+        self.errors_clear_btn.clicked.connect(self._clear_errors_pane)
+        header.addWidget(self.errors_clear_btn)
+        layout.addLayout(header)
+
         self.error_text = QTextEdit()
         self.error_text.setReadOnly(True)
         self.error_text.setStyleSheet(ERROR_PANE_QSS)
         layout.addWidget(self.error_text)
         return wrapper
+
+    def _clear_errors_pane(self) -> None:
+        """Сбросить текущее содержимое панели «Ошибки» вручную.
+
+        Чистим оба источника: дедуп камер (заполняется по результатам
+        проверок) и журнал прочих событий (импорт/ffplay/etc.).
+        """
+        had_anything = bool(self._camera_errors) or bool(self._misc_errors)
+        self._camera_errors.clear()
+        self._misc_errors.clear()
+        self._render_errors_pane()
+        if had_anything:
+            self._log("Панель «Ошибки» очищена")
 
     def _setup_logo(self) -> None:
         if not config.LOGO_PATH.exists():

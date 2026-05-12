@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QRunnable, QThreadPool, QTimer, Signal
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -18,6 +19,9 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
 )
+
+# Сколько строк превью гарантированно показываем без скролла.
+PREVIEW_VISIBLE_ROWS = 10
 
 from app.services.import_service import (
     ALL_FIELDS,
@@ -75,7 +79,15 @@ class ImportDialog(QDialog):
     def __init__(self, import_service: ImportService, template_service: TemplateService, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Импорт формы")
-        self.resize(1100, 720)
+        # Высота окна должна вмещать форму маппинга + 10 строк превью.
+        # Если экран маленький (ноутбук 1280×800) — обрезаемся под
+        # available geometry, чтобы окно не уходило за края.
+        target_h = 980
+        screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            target_h = min(target_h, max(720, avail.height() - 60))
+        self.resize(1100, target_h)
         self.import_service = import_service
         self.template_service = template_service
         self.file_path: Path | None = None
@@ -168,6 +180,11 @@ class ImportDialog(QDialog):
             ]
         )
         self.table.horizontalHeader().setStretchLastSection(True)
+        # Таблица всегда занимает не меньше высоты «10 строк + заголовок» —
+        # верхняя форма маппинга больше не выдавливает её до 1-2 строк.
+        row_h = self.table.verticalHeader().defaultSectionSize() or 30
+        header_h = self.table.horizontalHeader().sizeHint().height() or 30
+        self.table.setMinimumHeight(header_h + row_h * PREVIEW_VISIBLE_ROWS + 6)
 
         root = QVBoxLayout(self)
         root.addLayout(top)

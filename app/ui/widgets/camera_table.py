@@ -253,7 +253,7 @@ class CameraTable(QTableWidget):
         rtsp_item = QTableWidgetItem(mask_rtsp_url(cam.rtsp_url))
         rtsp_item.setData(Qt.ItemDataRole.UserRole, cam.rtsp_url)
         rtsp_item.setToolTip(
-            f"{cam.rtsp_url}\n\nПКМ → копировать / открыть. Двойной клик откроет поток в ffplay."
+            f"{cam.rtsp_url}\n\nПКМ → копировать / открыть. Двойной клик запустит RTSP."
         )
         self.setItem(row, self.COL_RTSP, rtsp_item)
 

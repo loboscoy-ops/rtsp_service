@@ -152,6 +152,7 @@ def leaflet_html(
     *,
     dark: bool = False,
     cluster: bool = False,
+    cluster_radius: int = 60,
 ) -> str:
     """HTML страницы с интерактивной картой Leaflet.
 
@@ -159,10 +160,10 @@ def leaflet_html(
       - ``updateCameraStatus(id, status)`` — поменять цвет маркера без перерисовки;
       - ``fitAllMarkers()`` — снова уместить все маркеры в видимую область.
 
-    При ``cluster=True`` маркеры группируются через Leaflet.markercluster —
-    это держит карту отзывчивой при тысячах точек (раздел «Камеры», 5к камер).
-    Для дашборда (один маркер на площадку) кластеризация не нужна, чтобы
-    были видны индивидуальные счётчики камер.
+    При ``cluster=True`` маркеры группируются через Leaflet.markercluster.
+    ``cluster_radius`` задаёт расстояние слипания в пикселях: для основной
+    карты (5к камер) ставим ~60, для дашборда — маленькое значение, чтобы
+    группировались только реально соприкасающиеся маркеры.
     """
     # Вставляем как JS-литерал; \u003c — чтобы случайный "</" в данных не закрыл <script>.
     markers_json = json.dumps(markers, ensure_ascii=False)
@@ -276,7 +277,8 @@ function statusClass(s) {{
 const markers = {markers_json};
 const map = L.map('map', {{ zoomControl: true }});
 map.attributionControl.setPrefix(
-  '<a href="https://leafletjs.com" target="_blank">Leaflet</a>'
+  '<span aria-hidden="true">\\uD83C\\uDDF7\\uD83C\\uDDFA</span> '
+  + '<a href="https://leafletjs.com" target="_blank">Leaflet</a>'
 );
 L.tileLayer('{tile_url}', {{
   maxZoom: 19,
@@ -292,7 +294,7 @@ const featureGroup = useCluster
       showCoverageOnHover: false,
       spiderfyOnMaxZoom: true,
       disableClusteringAtZoom: 17,
-      maxClusterRadius: 60
+      maxClusterRadius: {cluster_radius}
     }}).addTo(map)
   : L.featureGroup().addTo(map);
 
@@ -302,7 +304,7 @@ function buildIcon(num, status, kind) {{
   const cls = (kind === 'object') ? 'cam-num cam-object' : 'cam-num';
   const tip = (kind === 'object')
     ? 'Площадка: ' + num + ' камер'
-    : 'Клик: попап. Двойной клик: открыть в ffplay';
+    : 'Клик: попап. Двойной клик: запустить RTSP';
   return L.divIcon({{
     className: '',
     html: '<div class="' + cls + ' ' + statusClass(status)
@@ -330,7 +332,7 @@ function buildPopup(m) {{
        + '<b>№' + m.num + '</b> — ' + escHtml(m.name) + '<br/>'
        + escHtml(m.object) + '<br/>'
        + '<small>' + escHtml(m.status) + '</small><br/>'
-       + '<a class="open-link" href="' + openLink(m.id) + '">Открыть в ffplay</a>'
+       + '<a class="open-link" href="' + openLink(m.id) + '">Запустить RTSP</a>'
        + '<span class="hint">Двойной клик по маркеру — то же самое</span>'
        + '</div>';
 }}
@@ -557,11 +559,16 @@ class CameraMapView(QWidget):
 
         self._loaded = False
         self._pending_status_updates.clear()
+        # «Камеры»: радиус 60 px — на 5к точках клики попадают в кластеры.
+        # «Дашборд» (объекты): радиус 18 px — кластер только когда маркеры
+        # реально соприкасаются краями (одна площадка ровно над другой).
+        cluster_radius = 60 if self._mode == "cameras" else 18
         self._view.setHtml(
             leaflet_html(
                 markers,
                 dark=self._dark,
-                cluster=(self._mode == "cameras"),
+                cluster=True,
+                cluster_radius=cluster_radius,
             ),
             QUrl("https://local.map/"),
         )
