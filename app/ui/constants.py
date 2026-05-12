@@ -5,17 +5,258 @@
 from __future__ import annotations
 
 
-# --- цветовая палитра -------------------------------------------------------
+# --- цветовая палитра (тёмный дашборд) ---------------------------------------
 
-PING_OK_COLOR = "#3ecf8e"          # зелёный — хост отвечает на ICMP
-PING_BLOCKED_COLOR = "#d4a017"     # жёлтый — RTSP online, но ICMP режется
-PING_DEAD_COLOR = "#ff8b8b"        # красный — хост не отвечает
+# Фон и текст
+THEME_BG_WINDOW = "#12141a"
+THEME_BG_PANEL = "#1a1e28"
+THEME_BG_INPUT = "#222831"
+THEME_BG_ROW_ALT = "#161a22"
+THEME_FG = "#e8eaed"
+THEME_FG_MUTED = "#8b929e"
+THEME_BORDER = "#2d3544"
+THEME_ACCENT = "#3d8bfd"
+THEME_ACCENT_HOVER = "#5a9dff"
 
-ERROR_PANE_BG = "#2a1414"
+# Статусы камер / сеть (согласованы с маркерами карты)
+PING_OK_COLOR = "#3ecf8e"
+PING_BLOCKED_COLOR = "#e3a008"
+PING_DEAD_COLOR = "#f85149"
+
+STATUS_ONLINE_FG = "#3ecf8e"
+STATUS_OFFLINE_FG = "#f85149"
+STATUS_UNKNOWN_FG = "#8b949e"
+
+ERROR_PANE_BG = "#2a1214"
 ERROR_PANE_FG = "#ff8b8b"
 ERROR_PANE_QSS = (
-    f"QTextEdit {{ background-color: {ERROR_PANE_BG}; color: {ERROR_PANE_FG}; }}"
+    f"QTextEdit {{ background-color: {ERROR_PANE_BG}; color: {ERROR_PANE_FG}; "
+    f"border: 1px solid {THEME_BORDER}; border-radius: 6px; padding: 6px; }}"
 )
+
+# Глобальная таблица стилей Qt (Fusion-подобный тёмный UI в духе мониторинга)
+APP_GLOBAL_QSS = f"""
+QWidget {{
+  background-color: {THEME_BG_WINDOW};
+  color: {THEME_FG};
+  font-size: 13px;
+}}
+QMainWindow::separator {{
+  background: {THEME_BORDER};
+  width: 1px; height: 1px;
+}}
+QMenuBar {{
+  background-color: {THEME_BG_PANEL};
+  color: {THEME_FG};
+  border-bottom: 1px solid {THEME_BORDER};
+  padding: 2px 4px;
+}}
+QMenuBar::item {{
+  padding: 6px 10px;
+  border-radius: 4px;
+}}
+QMenuBar::item:selected {{
+  background-color: {THEME_BG_INPUT};
+}}
+QMenu {{
+  background-color: {THEME_BG_PANEL};
+  color: {THEME_FG};
+  border: 1px solid {THEME_BORDER};
+  padding: 4px;
+}}
+QMenu::item {{
+  padding: 8px 28px 8px 12px;
+  border-radius: 4px;
+}}
+QMenu::item:selected {{
+  background-color: rgba(61, 139, 253, 0.35);
+}}
+QMenu::separator {{
+  height: 1px;
+  background: {THEME_BORDER};
+  margin: 4px 8px;
+}}
+QToolBar {{
+  background-color: {THEME_BG_PANEL};
+  border: none;
+  border-bottom: 1px solid {THEME_BORDER};
+  padding: 4px 6px;
+  spacing: 6px;
+}}
+QToolBar QToolButton,
+QToolBar QPushButton {{
+  background-color: {THEME_BG_INPUT};
+  color: {THEME_FG};
+  border: 1px solid {THEME_BORDER};
+  border-radius: 6px;
+  padding: 6px 12px;
+  min-height: 22px;
+}}
+QToolBar QPushButton:hover {{
+  background-color: #2a3140;
+  border-color: {THEME_ACCENT};
+}}
+QToolBar QPushButton:pressed {{
+  background-color: #323a4a;
+}}
+QToolBar QPushButton:disabled {{
+  color: {THEME_FG_MUTED};
+  background-color: {THEME_BG_PANEL};
+}}
+QToolBar QLabel {{
+  color: {THEME_FG_MUTED};
+  background: transparent;
+}}
+QLineEdit, QComboBox, QSpinBox {{
+  background-color: {THEME_BG_INPUT};
+  color: {THEME_FG};
+  border: 1px solid {THEME_BORDER};
+  border-radius: 6px;
+  padding: 5px 8px;
+  min-height: 22px;
+}}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{
+  border-color: {THEME_ACCENT};
+}}
+QComboBox::drop-down {{
+  border: none;
+  width: 22px;
+}}
+QComboBox QAbstractItemView {{
+  background-color: {THEME_BG_INPUT};
+  color: {THEME_FG};
+  selection-background-color: {THEME_ACCENT};
+  selection-color: #ffffff;
+  border: 1px solid {THEME_BORDER};
+}}
+QTableWidget {{
+  background-color: {THEME_BG_PANEL};
+  alternate-background-color: {THEME_BG_ROW_ALT};
+  color: {THEME_FG};
+  gridline-color: {THEME_BORDER};
+  border: 1px solid {THEME_BORDER};
+  border-radius: 8px;
+}}
+QTableWidget::item {{
+  padding: 4px;
+}}
+QTableWidget::item:selected {{
+  background-color: rgba(61, 139, 253, 0.35);
+  color: {THEME_FG};
+}}
+QHeaderView::section {{
+  background-color: {THEME_BG_INPUT};
+  color: {THEME_FG_MUTED};
+  padding: 8px 6px;
+  border: none;
+  border-bottom: 2px solid {THEME_BORDER};
+  border-right: 1px solid {THEME_BORDER};
+  font-weight: 600;
+}}
+QListWidget {{
+  background-color: {THEME_BG_PANEL};
+  color: {THEME_FG};
+  border: 1px solid {THEME_BORDER};
+  border-radius: 8px;
+  padding: 4px;
+}}
+QListWidget::item {{
+  padding: 10px 8px;
+  border-radius: 6px;
+}}
+QListWidget::item:selected {{
+  background-color: rgba(61, 139, 253, 0.25);
+  color: {THEME_FG};
+}}
+QListWidget::item:hover:!selected {{
+  background-color: {THEME_BG_INPUT};
+}}
+QSplitter::handle {{
+  background-color: {THEME_BORDER};
+}}
+QSplitter::handle:horizontal {{ width: 3px; }}
+QSplitter::handle:vertical {{ height: 3px; }}
+QStatusBar {{
+  background-color: {THEME_BG_PANEL};
+  color: {THEME_FG_MUTED};
+  border-top: 1px solid {THEME_BORDER};
+}}
+QPushButton {{
+  background-color: {THEME_BG_INPUT};
+  color: {THEME_FG};
+  border: 1px solid {THEME_BORDER};
+  border-radius: 6px;
+  padding: 6px 14px;
+  min-height: 22px;
+}}
+QPushButton:hover {{
+  background-color: #2a3140;
+  border-color: {THEME_ACCENT};
+}}
+QPushButton:pressed {{
+  background-color: #323a4a;
+}}
+QPushButton:disabled {{
+  color: {THEME_FG_MUTED};
+  background-color: {THEME_BG_PANEL};
+}}
+QGroupBox {{
+  font-weight: 600;
+  color: {THEME_FG};
+  border: 1px solid {THEME_BORDER};
+  border-radius: 8px;
+  margin-top: 12px;
+  padding-top: 8px;
+}}
+QGroupBox::title {{
+  subcontrol-origin: margin;
+  left: 12px;
+  padding: 0 6px;
+  color: {THEME_FG_MUTED};
+}}
+QDialog {{
+  background-color: {THEME_BG_WINDOW};
+}}
+QDialogButtonBox QPushButton {{
+  min-width: 88px;
+}}
+QScrollBar:vertical {{
+  background: {THEME_BG_PANEL};
+  width: 10px;
+  margin: 0;
+  border-radius: 5px;
+}}
+QScrollBar::handle:vertical {{
+  background: #3d4555;
+  min-height: 28px;
+  border-radius: 5px;
+}}
+QScrollBar::handle:vertical:hover {{ background: #4a5366; }}
+QScrollBar:horizontal {{
+  background: {THEME_BG_PANEL};
+  height: 10px;
+  margin: 0;
+  border-radius: 5px;
+}}
+QScrollBar::handle:horizontal {{
+  background: #3d4555;
+  min-width: 28px;
+  border-radius: 5px;
+}}
+QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
+QMessageBox {{
+  background-color: {THEME_BG_WINDOW};
+}}
+QMessageBox QLabel {{
+  color: {THEME_FG};
+}}
+QProgressDialog {{
+  background-color: {THEME_BG_WINDOW};
+}}
+QFormLayout QLabel {{
+  color: {THEME_FG_MUTED};
+}}
+"""
 
 
 # --- размеры главного окна --------------------------------------------------

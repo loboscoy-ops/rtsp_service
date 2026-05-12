@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QApplication
 from app import config
 from app.database.db import initialize_database
 from app.database.repository import Repository
+from app.ui.constants import APP_GLOBAL_QSS
 from app.ui.main_window import MainWindow
 
 
@@ -57,6 +58,7 @@ def run() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName(config.APP_NAME)
     app.setApplicationVersion(config.APP_VERSION)
+    app.setStyleSheet(APP_GLOBAL_QSS)
 
     window = MainWindow(repo)
     app.aboutToQuit.connect(lambda: window.ffplay.terminate_all())

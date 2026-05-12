@@ -14,6 +14,7 @@ data/*.db-wal
 data/*.db.backup
 data/*.sqlite
 data/*.xlsx
+docs/.screenshot_db/
 resources/*.xlsx
 build/
 dist/
