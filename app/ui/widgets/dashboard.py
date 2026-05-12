@@ -58,6 +58,30 @@ def _site_strict_majority_online(cameras: list[CameraModel]) -> bool:
     return online / total > 0.5
 
 
+def _site_matches_search_needle(
+    obj: ObjectModel, cams: list[CameraModel], needle_lower: str
+) -> bool:
+    """Площадка попадает в выдачу дашборда по строке поиска (как в разделе «Камеры»).
+
+    Совпадение: имя объекта или подстрока в УИН / ID камеры / имени / группе
+    любой камеры этой площадки (без учёта регистра).
+    """
+    if not needle_lower:
+        return True
+    if needle_lower in (obj.name or "").casefold():
+        return True
+    for c in cams:
+        for raw in (
+            c.uin,
+            c.camera_identifier,
+            c.camera_name,
+            c.group_name,
+        ):
+            if needle_lower in (raw or "").casefold():
+                return True
+    return False
+
+
 def _ratio_color(online: int, offline: int, unknown: int) -> str:
     total = online + offline + unknown
     if total == 0:
@@ -331,7 +355,7 @@ class DashboardView(QWidget):
             by_object.setdefault(int(c.object_id), []).append(c)
         return by_object
 
-    def refresh(self, status_filter: str = "all") -> None:
+    def refresh(self, status_filter: str = "all", search: str = "") -> None:
         try:
             objects = self.repo.list_objects()
             cameras = self.repo.list_cameras()
@@ -339,6 +363,7 @@ class DashboardView(QWidget):
             return
 
         sf = (status_filter or "all").strip().lower()
+        needle = (search or "").strip().casefold()
         by_object = self._cameras_by_object(cameras)
 
         # Фильтры статуса (как в тулбаре): активно сужают карту и список площадок.
@@ -359,13 +384,25 @@ class DashboardView(QWidget):
         else:
             map_cameras = cameras
 
+        if needle:
+            obj_by_id = {int(o.id): o for o in objects}
+            filtered: list[CameraModel] = []
+            for c in map_cameras:
+                oid = int(c.object_id)
+                obj = obj_by_id.get(oid)
+                if obj is None:
+                    continue
+                if _site_matches_search_needle(obj, by_object.get(oid, []), needle):
+                    filtered.append(c)
+            map_cameras = filtered
+
         # Раньше дашборд показывал по одному маркеру на площадку (с цифрой
         # «сколько камер»). Пользователь попросил видеть именно камеры, а не
         # агрегат «9» — поэтому теперь рисуем те же маркеры, что и в разделе
         # «Камеры»: один маркер на камеру, склеиваются только реально
         # перекрывающиеся друг другом точки.
         self.map_view.set_cameras(map_cameras)
-        self._update_cards(objects, by_object, status_filter=sf)
+        self._update_cards(objects, by_object, status_filter=sf, search_needle=needle)
 
     @staticmethod
     def _severity_key(obj: ObjectModel, cams: list[CameraModel]):
@@ -396,12 +433,16 @@ class DashboardView(QWidget):
         by_object: dict[int, list[CameraModel]],
         *,
         status_filter: str = "all",
+        search_needle: str = "",
     ) -> None:
         sf = (status_filter or "all").strip().lower()
+        needle = (search_needle or "").strip().casefold()
 
         ordered: list[tuple[ObjectModel, list[CameraModel]]] = []
         for obj in objects:
             cams = by_object.get(int(obj.id), [])
+            if needle and not _site_matches_search_needle(obj, cams, needle):
+                continue
             if sf == "offline" and not _site_strict_majority_offline(cams):
                 continue
             if sf == "online" and not _site_strict_majority_online(cams):

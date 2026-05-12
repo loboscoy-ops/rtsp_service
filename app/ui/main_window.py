@@ -179,7 +179,7 @@ class MainWindow(QMainWindow):
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText(
-            "Поиск: УИН, ID камеры, имя, группа, объект"
+            "Поиск по всем площадкам: фрагмент УИН, ID, имя, объект (дашборд — колонка «Площадки»)"
         )
         self.search_input.textChanged.connect(self._refresh_cameras)
         toolbar.addWidget(self.search_input)
@@ -254,7 +254,10 @@ class MainWindow(QMainWindow):
             return
         self._view_stack.setCurrentIndex(index)
         if index == 1:
-            self.dashboard.refresh(status_filter=self.status_filter.currentText())
+            self.dashboard.refresh(
+                status_filter=self.status_filter.currentText(),
+                search=self.search_input.text(),
+            )
 
     def _on_dashboard_object_selected(self, object_id: int) -> None:
         """Клик по карточке площадки на дашборде → переходим в раздел
@@ -708,9 +711,12 @@ class MainWindow(QMainWindow):
             self.current_object_id = first_id
 
     def _refresh_cameras(self) -> None:
+        q = self.search_input.text()
+        # Непустой поиск — по всем площадкам (иначе «3871» не найдёт УИН на другом объекте).
+        object_scope: int | None = None if q.strip() else self.current_object_id
         cameras = self.repo.list_cameras(
-            object_id=self.current_object_id,
-            search=self.search_input.text(),
+            object_id=object_scope,
+            search=q,
             status_filter=self.status_filter.currentText(),
         )
         self.cameras_cache = self._apply_sort(cameras)
@@ -718,7 +724,10 @@ class MainWindow(QMainWindow):
         if hasattr(self, "map_view"):
             self.map_view.set_cameras(self.cameras_cache)
         if hasattr(self, "_view_stack") and self._view_stack.currentIndex() == 1:
-            self.dashboard.refresh(status_filter=self.status_filter.currentText())
+            self.dashboard.refresh(
+                status_filter=self.status_filter.currentText(),
+                search=q,
+            )
 
     def _refresh_views_after_checks(self) -> None:
         if self._closing:
