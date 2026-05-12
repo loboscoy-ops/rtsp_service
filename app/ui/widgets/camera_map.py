@@ -166,7 +166,9 @@ def leaflet_html(
     При ``cluster=True`` маркеры группируются через Leaflet.markercluster.
 
     ``dashboard_hover=True`` — на карте дашборда при наведении показывается
-    интерактивная «плашка»: имя объекта, УИН и кнопка перехода в таблицу.
+    интерактивная «плашка»: имя объекта, УИН и кнопка перехода в таблицу;
+    кластеры при этом окрашиваются по доле online: зелёный (100%% online),
+    жёлтый (от 30%% до &lt;100%%), красный (&lt;30%% online).
     """
     # Вставляем как JS-литерал; \u003c — чтобы случайный "</" в данных не закрыл <script>.
     markers_json = json.dumps(markers, ensure_ascii=False)
@@ -319,6 +321,27 @@ html, body, #map {{ height: 100%; margin: 0; padding: 0; background: {body_bg}; 
 .cam-hover-stack .cam-hover:not(:first-child) {{
   border-top: 1px solid {popup_border};
 }}
+/* Кластеры карты дашборда: цвет по доле online среди маркеров */
+.marker-cluster.dash-cluster-green {{ background-color: rgba(45, 157, 95, 0.42); }}
+.marker-cluster.dash-cluster-green div {{
+  background-color: #2d9d5f;
+  color: #ffffff;
+}}
+.marker-cluster.dash-cluster-yellow {{ background-color: rgba(234, 179, 8, 0.42); }}
+.marker-cluster.dash-cluster-yellow div {{
+  background-color: #ca8a04;
+  color: #111111;
+}}
+.marker-cluster.dash-cluster-red {{ background-color: rgba(196, 60, 60, 0.42); }}
+.marker-cluster.dash-cluster-red div {{
+  background-color: #c43c3c;
+  color: #ffffff;
+}}
+.marker-cluster.dash-cluster-grey {{ background-color: rgba(107, 114, 128, 0.42); }}
+.marker-cluster.dash-cluster-grey div {{
+  background-color: #6b7280;
+  color: #ffffff;
+}}
 </style>
 </head><body>
 <div id="map"></div>
@@ -397,6 +420,49 @@ function bindClusterDashboardHover(layer) {{
     cluster.unbindTooltip();
   }});
 }}
+
+/** Доля online в кластере (только маркеры с _meta.status). */
+function dashClusterOnlineFraction(cluster) {{
+  const kids = cluster.getAllChildMarkers();
+  let total = 0;
+  let online = 0;
+  kids.forEach(function (mk) {{
+    const meta = mk._meta;
+    if (!meta || meta.kind !== 'camera') return;
+    total++;
+    if (meta.status === 'online') online++;
+  }});
+  return {{ total: total, online: online }};
+}}
+
+/**
+ * Цвет кружка кластера на дашборде:
+ * - зелёный — все камеры online (100%);
+ * - жёлтый — от 30% до <100% online;
+ * - красный — строго менее 30% online.
+ */
+function dashClusterTier(cluster) {{
+  const h = dashClusterOnlineFraction(cluster);
+  if (h.total <= 0) return 'grey';
+  const frac = h.online / h.total;
+  if (frac >= 1 - 1e-9) return 'green';
+  if (frac < 0.3) return 'red';
+  return 'yellow';
+}}
+
+function dashClusterIconCreate(cluster) {{
+  const tier = dashClusterTier(cluster);
+  const count = cluster.getChildCount();
+  let sizeCls = ' marker-cluster-large';
+  if (count < 10) sizeCls = ' marker-cluster-small';
+  else if (count < 100) sizeCls = ' marker-cluster-medium';
+  return new L.DivIcon({{
+    html: '<div><span>' + count + '</span></div>',
+    className: 'marker-cluster dash-cluster-' + tier + sizeCls,
+    iconSize: new L.Point(40, 40)
+  }});
+}}
+
 const markers = {markers_json};
 const map = L.map('map', {{ zoomControl: true }});
 map.attributionControl.setPrefix(
@@ -411,14 +477,18 @@ L.tileLayer('{tile_url}', {{
 
 const markerById = {{}};
 const useCluster = {cluster_flag};
+const clusterOpts = {{
+  chunkedLoading: true,
+  showCoverageOnHover: false,
+  spiderfyOnMaxZoom: true,
+  disableClusteringAtZoom: 17,
+  maxClusterRadius: {cluster_radius}
+}};
+if (useCluster && dashHover) {{
+  clusterOpts.iconCreateFunction = dashClusterIconCreate;
+}}
 const featureGroup = useCluster
-  ? L.markerClusterGroup({{
-      chunkedLoading: true,
-      showCoverageOnHover: false,
-      spiderfyOnMaxZoom: true,
-      disableClusteringAtZoom: 17,
-      maxClusterRadius: {cluster_radius}
-    }}).addTo(map)
+  ? L.markerClusterGroup(clusterOpts).addTo(map)
   : L.featureGroup().addTo(map);
 
 if (useCluster && dashHover) {{
