@@ -310,8 +310,18 @@ class ImportService:
         normalized = [_norm(c) for c in header_row]
         used: set[int] = set()
         mapping: dict[str, int | None] = {f: None for f in ALL_FIELDS}
+
+        # Для поля "Группа/тип" всегда предпочитаем колонку "Типы камер",
+        # если она присутствует в заголовках формы.
+        preferred_group_col = self._preferred_group_name_col(normalized)
+        if preferred_group_col is not None:
+            mapping["group_name"] = preferred_group_col
+            used.add(preferred_group_col)
+
         # 1. exact match first
         for field_name, hints in FIELD_HINTS.items():
+            if mapping[field_name] is not None:
+                continue
             wanted = {_norm(h) for h in hints}
             for idx, h in enumerate(normalized):
                 if not h or idx in used:
@@ -332,6 +342,16 @@ class ImportService:
                     used.add(idx)
                     break
         return mapping
+
+    @staticmethod
+    def _preferred_group_name_col(normalized_header: list[str]) -> int | None:
+        preferred_tokens = ("типы камер", "типы камеры")
+        for idx, title in enumerate(normalized_header):
+            if not title:
+                continue
+            if any(token in title for token in preferred_tokens):
+                return idx
+        return None
 
     def build_preview_from_mapping(
         self,

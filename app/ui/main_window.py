@@ -4,10 +4,11 @@ import logging
 import shutil
 import subprocess
 import traceback
+from collections import deque
 from datetime import datetime
 from typing import Callable, Optional
 
-from PySide6.QtCore import Qt, QThreadPool, QTimer
+from PySide6.QtCore import QByteArray, QSettings, Qt, QThreadPool, QTimer
 from PySide6.QtGui import QColor, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -38,7 +39,6 @@ from app.services.ffplay_service import FFPlayService
 from app.services.import_service import ImportService
 from app.services.template_service import TemplateService
 from app.ui.constants import (
-    CHECK_TIMER_MIN_INTERVAL_SEC,
     ERROR_PANE_BG,
     ERROR_PANE_FG,
     FFPLAY_FOCUS_DELAY_MS,
@@ -68,6 +68,10 @@ _log = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
+    _SETTINGS_SPLITTER_MAIN = "main_window/splitter_main"
+    _SETTINGS_SPLITTER_CAMERAS = "main_window/splitter_cameras"
+    _SETTINGS_SPLITTER_BOTTOM = "main_window/splitter_bottom"
+
     def __init__(self, repository: Repository):
         super().__init__()
         self.repo = repository
@@ -89,6 +93,9 @@ class MainWindow(QMainWindow):
         self._camera_errors: dict[int, str] = {}
         # Прочие разовые ошибки (FFPLAY/IMPORT…) — список с временем.
         self._misc_errors: list[str] = []
+        self._active_checks: dict[int, str] = {}
+        self._recent_poll_events: deque[str] = deque(maxlen=5)
+        self._priority_object_id: int | None = None
 
         self.setWindowTitle(f"{config.APP_NAME} v.{config.APP_VERSION}")
         self.resize(*WINDOW_DEFAULT_SIZE)
@@ -98,12 +105,20 @@ class MainWindow(QMainWindow):
         self._refresh_objects()
         self._refresh_cameras()
 
-        self.timer = QTimer(self)
-        self.timer.setInterval(
-            max(CHECK_TIMER_MIN_INTERVAL_SEC, config.CHECK_INTERVAL_SEC) * 1000
-        )
-        self.timer.timeout.connect(self._auto_check_all_enabled)
-        self.timer.start()
+        self._offline_timer = QTimer(self)
+        self._offline_timer.setInterval(max(30, config.CHECK_INTERVAL_OFFLINE_SEC) * 1000)
+        self._offline_timer.timeout.connect(self._auto_check_offline_objects)
+        self._offline_timer.start()
+
+        self._online_timer = QTimer(self)
+        self._online_timer.setInterval(max(60, config.CHECK_INTERVAL_ONLINE_SEC) * 1000)
+        self._online_timer.timeout.connect(self._auto_check_online_objects)
+        self._online_timer.start()
+
+        self._poll_activity_timer = QTimer(self)
+        self._poll_activity_timer.setInterval(1000)
+        self._poll_activity_timer.timeout.connect(self._render_poll_activity)
+        self._poll_activity_timer.start()
 
         self._refresh_debounce = QTimer(self)
         self._refresh_debounce.setSingleShot(True)
@@ -119,6 +134,7 @@ class MainWindow(QMainWindow):
     def _setup_ui(self) -> None:
         self._build_toolbar()
         self.setCentralWidget(self._build_central_stack())
+        self._restore_splitter_states()
         # Status bar убран целиком — лог пишется только в системный логгер,
         # лого живёт в правом углу тулбара (см. _build_toolbar).
 
@@ -163,10 +179,18 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.search_input)
 
         self.status_filter = QComboBox()
-        self.status_filter.addItems(["all", "online", "offline", "unknown"])
+        self.status_filter.addItems(["all", "online", "offline"])
         self.status_filter.currentIndexChanged.connect(self._refresh_cameras)
         toolbar.addWidget(QLabel("Статус:"))
         toolbar.addWidget(self.status_filter)
+        toolbar.addWidget(QLabel("Опрос:"))
+        self.poll_activity = QLineEdit()
+        self.poll_activity.setReadOnly(True)
+        self.poll_activity.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.poll_activity.setFixedWidth(max(180, self.status_filter.sizeHint().width() * 2))
+        self.poll_activity.setToolTip("Текущие процессы опроса камер")
+        toolbar.addWidget(self.poll_activity)
+        self._render_poll_activity()
 
         # Растяжка прижимает лого «Урус» в правый угол тулбара.
         spacer = QWidget()
@@ -243,6 +267,8 @@ class MainWindow(QMainWindow):
         splitter.setSizes([SIDEBAR_DEFAULT_WIDTH, RIGHT_PANE_DEFAULT_WIDTH])
         splitter.setCollapsible(0, False)
         splitter.setCollapsible(1, False)
+        splitter.splitterMoved.connect(lambda *_: self._save_splitter_states())
+        self._main_splitter = splitter
         return splitter
 
     def _build_objects_pane(self) -> QWidget:
@@ -265,6 +291,8 @@ class MainWindow(QMainWindow):
         splitter.setSizes(list(CAMERAS_SPLITTER_DEFAULT_SIZES))
         splitter.setCollapsible(0, False)
         splitter.setCollapsible(1, False)
+        splitter.splitterMoved.connect(lambda *_: self._save_splitter_states())
+        self._cameras_splitter = splitter
         return splitter
 
     def _build_table_pane(self) -> QWidget:
@@ -286,13 +314,63 @@ class MainWindow(QMainWindow):
         splitter.setSizes(list(BOTTOM_SPLITTER_DEFAULT_SIZES))
         splitter.setCollapsible(0, False)
         splitter.setCollapsible(1, False)
+        splitter.splitterMoved.connect(lambda *_: self._save_splitter_states())
+        self._bottom_splitter = splitter
         return splitter
+
+    def _save_splitter_states(self) -> None:
+        settings = QSettings()
+        if hasattr(self, "_main_splitter"):
+            settings.setValue(
+                self._SETTINGS_SPLITTER_MAIN,
+                self._main_splitter.saveState(),
+            )
+        if hasattr(self, "_cameras_splitter"):
+            settings.setValue(
+                self._SETTINGS_SPLITTER_CAMERAS,
+                self._cameras_splitter.saveState(),
+            )
+        if hasattr(self, "_bottom_splitter"):
+            settings.setValue(
+                self._SETTINGS_SPLITTER_BOTTOM,
+                self._bottom_splitter.saveState(),
+            )
+
+    def _restore_splitter_states(self) -> None:
+        settings = QSettings()
+        self._restore_splitter(
+            settings.value(self._SETTINGS_SPLITTER_MAIN),
+            getattr(self, "_main_splitter", None),
+        )
+        self._restore_splitter(
+            settings.value(self._SETTINGS_SPLITTER_CAMERAS),
+            getattr(self, "_cameras_splitter", None),
+        )
+        self._restore_splitter(
+            settings.value(self._SETTINGS_SPLITTER_BOTTOM),
+            getattr(self, "_bottom_splitter", None),
+        )
+
+    @staticmethod
+    def _restore_splitter(raw_state, splitter: Optional[QSplitter]) -> None:
+        if splitter is None or raw_state is None:
+            return
+        if isinstance(raw_state, QByteArray):
+            splitter.restoreState(raw_state)
+            return
+        if isinstance(raw_state, bytes):
+            splitter.restoreState(QByteArray(raw_state))
+            return
+        if isinstance(raw_state, str):
+            splitter.restoreState(QByteArray.fromBase64(raw_state.encode("ascii")))
 
     def _build_map_panel(self) -> QWidget:
         wrapper = QWidget()
         layout = QVBoxLayout(wrapper)
         layout.setContentsMargins(0, 0, 0, 0)
-        self.map_view = CameraMapView(self)
+        # Нумерация маркеров на миникарте «Камеры» — как на дашборде:
+        # внутри каждой площадки 1..N.
+        self.map_view = CameraMapView(self, per_object_marker_numbers=True)
         self.map_view.open_camera_requested.connect(self._open_camera_stream)
         layout.addWidget(self.map_view)
         return wrapper
@@ -410,6 +488,7 @@ class MainWindow(QMainWindow):
 
     def _bind_signals(self) -> None:
         self.sidebar.object_selected.connect(self._on_object_selected)
+        self.sidebar.check_status_requested.connect(self._on_priority_object_check_requested)
         self.sidebar.delete_requested.connect(self._delete_object)
         self.sidebar.rename_requested.connect(self._rename_object)
         self.table.open_requested.connect(self._open_camera_stream)
@@ -423,6 +502,7 @@ class MainWindow(QMainWindow):
         self.table.bulk_delete_requested.connect(self._bulk_delete)
         self.table.bulk_edit_requested.connect(self._bulk_edit)
         self.checker.camera_checked.connect(self._on_camera_checked)
+        self.checker.camera_check_started.connect(self._on_camera_check_started)
 
     # ==================================================================
     # logging helpers
@@ -433,6 +513,20 @@ class MainWindow(QMainWindow):
         # При необходимости их можно увидеть через Console.app (macOS) или
         # ~/Library/Logs/...
         _log.info("%s", message)
+
+    def _render_poll_activity(self) -> None:
+        if not hasattr(self, "poll_activity"):
+            return
+        if not self._active_checks:
+            self.poll_activity.setText("Жду опроса")
+            self.poll_activity.setStyleSheet(
+                "QLineEdit { color: #2d9d5f; font-weight: 700; }"
+            )
+            return
+        self.poll_activity.setText("Проверяю камеры")
+        self.poll_activity.setStyleSheet(
+            "QLineEdit { color: #eab308; font-weight: 600; }"
+        )
 
     def _log_error(self, message: str) -> None:
         """Разовая ошибка не от проверки камер (FFPLAY/IMPORT…)."""
@@ -872,26 +966,79 @@ class MainWindow(QMainWindow):
         self._log(f"Проверка камеры {self._camera_row_label(cam.id)}: {cam.camera_name}")
 
     def _manual_check_all(self) -> None:
-        self._run_check_all_enabled("Запущена ручная проверка всех объектов")
-
-    def _auto_check_all_enabled(self) -> None:
-        self._run_check_all_enabled("Автопроверка")
-
-    def _run_check_all_enabled(self, log_prefix: str) -> None:
-        # Защита от наложения циклов: если в пуле ещё висят непроверенные
-        # камеры от прошлого тика — пропускаем новый запуск, чтобы пул
-        # не разрастался до тысяч задач при тяжёлом сценарии 5к камер.
-        pool = QThreadPool.globalInstance()
-        if pool.activeThreadCount() >= pool.maxThreadCount():
-            self._log(
-                f"{log_prefix}: предыдущий цикл ещё идёт "
-                f"(активных потоков {pool.activeThreadCount()}/{pool.maxThreadCount()}), пропускаем"
-            )
-            return
         cameras = self.repo.list_cameras(object_id=None, search="", status_filter="all")
         enabled = [c for c in cameras if c.enabled]
-        self.checker.check_many(enabled)
-        self._log(f"{log_prefix}: {len(enabled)} камер")
+        self._start_checks(enabled, "Ручная проверка всех объектов")
+
+    def _auto_check_offline_objects(self) -> None:
+        if self._priority_object_id is not None:
+            return
+        if self._active_checks:
+            self._log("Автоопрос проблемных объектов: предыдущий цикл ещё идёт, пропускаем")
+            return
+        all_cameras = self.repo.list_cameras(object_id=None, search="", status_filter="all")
+        bad_object_ids = {
+            int(c.object_id) for c in all_cameras if (c.status or "").lower() != "online"
+        }
+        target = [c for c in all_cameras if c.enabled and int(c.object_id) in bad_object_ids]
+        self._start_checks(target, "Автоопрос объектов с offline (каждые 3 мин)")
+
+    def _auto_check_online_objects(self) -> None:
+        if self._priority_object_id is not None:
+            return
+        if self._active_checks:
+            self._log("Автоопрос online-объектов: предыдущий цикл ещё идёт, пропускаем")
+            return
+        all_cameras = self.repo.list_cameras(object_id=None, search="", status_filter="all")
+        bad_object_ids = {
+            int(c.object_id) for c in all_cameras if (c.status or "").lower() != "online"
+        }
+        target = [
+            c
+            for c in all_cameras
+            if c.enabled and int(c.object_id) not in bad_object_ids
+        ]
+        self._start_checks(target, "Автоопрос объектов без offline (каждые 10 мин)")
+
+    def _on_priority_object_check_requested(self, object_id: int) -> None:
+        cameras = self.repo.list_cameras(object_id=object_id, search="", status_filter="all")
+        enabled = [c for c in cameras if c.enabled]
+        self._priority_object_id = object_id
+        self._offline_timer.stop()
+        self._online_timer.stop()
+        QThreadPool.globalInstance().clear()
+        self._active_checks.clear()
+        self._start_checks(enabled, f"Приоритетный опрос объекта {object_id}")
+
+    def _start_checks(self, cameras: list[CameraModel], reason: str) -> None:
+        if not cameras:
+            self._log(f"{reason}: камер для опроса нет")
+            self._render_poll_activity()
+            if self._priority_object_id is not None:
+                self._finish_priority_mode()
+            return
+        for cam in cameras:
+            self._active_checks[int(cam.id)] = f"{cam.object_name} / {cam.camera_name}"
+        self._render_poll_activity()
+        self._log(f"{reason}: {len(cameras)} камер")
+        self.checker.check_many(cameras)
+
+    def _on_camera_check_started(
+        self,
+        camera_id: int,
+        _object_id: int,
+        object_name: str,
+        camera_name: str,
+    ) -> None:
+        self._active_checks[int(camera_id)] = f"{object_name} / {camera_name}"
+        self._recent_poll_events.appendleft(f"{object_name} / {camera_name}")
+        self._render_poll_activity()
+
+    def _finish_priority_mode(self) -> None:
+        self._priority_object_id = None
+        self._offline_timer.start()
+        self._online_timer.start()
+        self._log("Приоритетный опрос завершён, плановые циклы возобновлены")
 
     def _on_camera_checked(self, result: CheckResult) -> None:
         if self._closing:
@@ -927,6 +1074,10 @@ class MainWindow(QMainWindow):
             )
         if not self._refresh_debounce.isActive():
             self._refresh_debounce.start()
+        self._active_checks.pop(int(result.camera_id), None)
+        self._render_poll_activity()
+        if self._priority_object_id is not None and not self._active_checks:
+            self._finish_priority_mode()
 
     @staticmethod
     def _format_ping_part(ping_ok: Optional[bool], ping_ms: Optional[int]) -> str:
@@ -968,6 +1119,18 @@ class MainWindow(QMainWindow):
         self._refresh_objects()
         self._refresh_cameras()
         self._log(f"Импорт завершен. Создано={created}, обновлено={updated}")
+        # По запросу: сразу после загрузки формы запускать опрос камер.
+        if created + updated <= 0:
+            return
+        if self._active_checks:
+            # Останавливаем текущую очередь, чтобы приоритетно проверить
+            # актуально загруженные данные.
+            QThreadPool.globalInstance().clear()
+            self._active_checks.clear()
+            self._render_poll_activity()
+        cameras = self.repo.list_cameras(object_id=None, search="", status_filter="all")
+        enabled = [c for c in cameras if c.enabled]
+        self._start_checks(enabled, "Опрос после импорта формы")
 
     # ==================================================================
     # close
@@ -975,7 +1138,10 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self._closing = True
-        self.timer.stop()
+        self._save_splitter_states()
+        self._offline_timer.stop()
+        self._online_timer.stop()
+        self._poll_activity_timer.stop()
         self._refresh_debounce.stop()
 
         self._disconnect_background_slots()
@@ -1008,7 +1174,10 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _disconnect_background_slots(self) -> None:
-        for sig, slot in ((self.checker.camera_checked, self._on_camera_checked),):
+        for sig, slot in (
+            (self.checker.camera_checked, self._on_camera_checked),
+            (self.checker.camera_check_started, self._on_camera_check_started),
+        ):
             try:
                 sig.disconnect(slot)
             except TypeError:

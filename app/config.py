@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 APP_NAME = "Urus Camera Monitor"
-APP_VERSION = "0.1.66"
+APP_VERSION = "0.1.0"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 IS_FROZEN = bool(getattr(sys, "frozen", False))
@@ -61,15 +61,12 @@ EXCEL_TEMPLATE_HEADERS = [
     "enabled",
 ]
 
-CHECK_INTERVAL_SEC = int(os.getenv("RTSP_CHECK_INTERVAL_SEC", "60"))
-CHECK_TIMEOUT_SEC = int(os.getenv("RTSP_CHECK_TIMEOUT_SEC", "5"))
-# «Длинная» проверка для камер со статусом unknown: один раз даём ~2 минуты,
-# после неё камера обязана стать либо online, либо offline (без зависших unknown).
-CHECK_TIMEOUT_DEEP_SEC = int(os.getenv("RTSP_CHECK_TIMEOUT_DEEP_SEC", "120"))
-# Текст ошибки, который попадает в колонку «Ошибка» при offline после длинной проверки.
-UNKNOWN_OFFLINE_FAIL_MESSAGE = os.getenv(
-    "RTSP_UNKNOWN_OFFLINE_FAIL_MESSAGE",
-    "RTSP не подключается > 2 мин",
+CHECK_INTERVAL_OFFLINE_SEC = int(os.getenv("RTSP_CHECK_INTERVAL_OFFLINE_SEC", "180"))
+CHECK_INTERVAL_ONLINE_SEC = int(os.getenv("RTSP_CHECK_INTERVAL_ONLINE_SEC", "600"))
+CHECK_TIMEOUT_SEC = int(os.getenv("RTSP_CHECK_TIMEOUT_SEC", "30"))
+CHECK_TIMEOUT_FAIL_MESSAGE = os.getenv(
+    "RTSP_CHECK_TIMEOUT_FAIL_MESSAGE",
+    "RTSP не подключается > 30 сек",
 )
 # Префикс-код, который ставится в колонку «Ошибка» для любой offline-камеры.
 OFFLINE_ERROR_CODE = os.getenv("RTSP_OFFLINE_ERROR_CODE", "0x00")
@@ -86,4 +83,10 @@ FFPLAY_BIN = os.getenv("RTSP_FFPLAY_BIN", "ffplay")
 
 # Seed demo data on first launch if DB is empty.
 SEED_ON_EMPTY = os.getenv("RTSP_SEED_ON_EMPTY", "1") == "1"
+
+# Тестовый режим ветки test_design: синтетический дашборд на 400 площадок.
+TEST_DESIGN_EMULATION = os.getenv("RTSP_TEST_DESIGN_EMULATION", "1") == "1"
+TEST_DESIGN_OBJECTS = int(os.getenv("RTSP_TEST_DESIGN_OBJECTS", "400"))
+TEST_DESIGN_CAMERAS_MIN = int(os.getenv("RTSP_TEST_DESIGN_CAMERAS_MIN", "6"))
+TEST_DESIGN_CAMERAS_MAX = int(os.getenv("RTSP_TEST_DESIGN_CAMERAS_MAX", "10"))
 

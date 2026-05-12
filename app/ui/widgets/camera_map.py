@@ -9,7 +9,14 @@ from collections import defaultdict
 from typing import TYPE_CHECKING, Optional
 
 from PySide6.QtCore import QUrl, Signal
-from PySide6.QtWidgets import QLabel, QStackedWidget, QTextBrowser, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QLabel,
+    QMenu,
+    QStackedWidget,
+    QTextBrowser,
+    QVBoxLayout,
+    QWidget,
+)
 
 if TYPE_CHECKING:
     from app.database.models import CameraModel, ObjectModel
@@ -328,35 +335,43 @@ html, body, #map {{ height: 100%; margin: 0; padding: 0; background: {body_bg}; 
   background: {popup_bg};
   color: {popup_fg};
   font-family: system-ui, sans-serif;
+  white-space: normal;
+  max-width: none;
 }}
 .leaflet-tooltip.cam-hover-tip .leaflet-tooltip-content {{
   margin: 0;
 }}
 .cam-hover {{
-  padding: 10px 12px;
-  min-width: 200px;
-  max-width: 280px;
+  padding: 5px 6px;
+  width: max-content;
+  min-width: 120px;
+  max-width: 480px;
 }}
 .cam-hover .hover-title {{
   font-weight: 700;
-  font-size: 14px;
-  margin-bottom: 4px;
+  font-size: 11px;
+  margin-bottom: 2px;
+  white-space: normal;
+  word-break: break-word;
 }}
 .cam-hover .hover-uin {{
-  font-size: 12px;
+  font-size: 9px;
   color: {hint_fg};
-  margin-bottom: 8px;
+  margin-bottom: 4px;
+  white-space: normal;
+  word-break: break-word;
 }}
 .cam-hover .hover-uin.muted {{
   font-style: italic;
 }}
 .cam-hover-stack {{
-  padding: 10px 12px;
-  min-width: 200px;
-  max-width: 300px;
+  padding: 5px 6px;
+  width: max-content;
+  min-width: 120px;
+  max-width: 520px;
 }}
 .cam-hover-stack .cam-hover {{
-  padding: 8px 0;
+  padding: 4px 0;
   min-width: auto;
   max-width: none;
 }}
@@ -420,6 +435,14 @@ function statusClass(s) {{
   return 'cam-unknown';
 }}
 const dashHover = {dash_hover_flag};
+function dashboardObjectCountFromMarkers(items) {{
+  const ids = new Set();
+  items.forEach(function (m) {{
+    if (m.kind === 'camera' && typeof m.object_id === 'number') ids.add(m.object_id);
+    else if (m.kind === 'object' && typeof m.id === 'number') ids.add(m.id);
+  }});
+  return ids.size;
+}}
 
 function buildHoverPanel(objName, uin, _objectId) {{
   const title = '<div class="hover-title">' + escHtml(objName || 'Объект') + '</div>';
@@ -429,23 +452,41 @@ function buildHoverPanel(objName, uin, _objectId) {{
   return '<div class="cam-hover">' + title + uinDiv + '</div>';
 }}
 
-function attachDashboardHover(marker, m) {{
+function attachDashboardHover(marker, m, hoverDelayMs) {{
   if (!dashHover || m.kind !== 'camera' || typeof m.object_id !== 'number') return;
-  marker.bindTooltip(
-    buildHoverPanel(m.object, m.uin || '', m.object_id),
-    {{
-      sticky: true,
-      direction: 'auto',
-      opacity: 1,
-      interactive: false,
-      className: 'cam-hover-tip'
+  const html = buildHoverPanel(m.object, m.uin || '', m.object_id);
+  const opts = {{
+    sticky: true,
+    direction: 'auto',
+    opacity: 1,
+    interactive: false,
+    className: 'cam-hover-tip'
+  }};
+  if (hoverDelayMs <= 0) {{
+    marker.bindTooltip(html, opts);
+    return;
+  }}
+  let timerId = null;
+  marker.on('mouseover', function () {{
+    timerId = window.setTimeout(function () {{
+      marker.bindTooltip(html, opts).openTooltip();
+      timerId = null;
+    }}, hoverDelayMs);
+  }});
+  marker.on('mouseout', function () {{
+    if (timerId !== null) {{
+      window.clearTimeout(timerId);
+      timerId = null;
     }}
-  );
+    marker.closeTooltip();
+    marker.unbindTooltip();
+  }});
 }}
 
-function bindClusterDashboardHover(layer) {{
+function bindClusterDashboardHover(layer, hoverDelayMs) {{
   if (!dashHover || !useCluster) return;
-  layer.on('clustermouseover', function (ev) {{
+  let clusterTimer = null;
+  const renderClusterTooltip = function (ev) {{
     const cluster = ev.layer;
     const kids = cluster.getAllChildMarkers();
     const seen = {{}};
@@ -470,8 +511,22 @@ function bindClusterDashboardHover(layer) {{
       interactive: false,
       className: 'cam-hover-tip'
     }}).openTooltip();
+  }};
+  layer.on('clustermouseover', function (ev) {{
+    if (hoverDelayMs <= 0) {{
+      renderClusterTooltip(ev);
+      return;
+    }}
+    clusterTimer = window.setTimeout(function () {{
+      renderClusterTooltip(ev);
+      clusterTimer = null;
+    }}, hoverDelayMs);
   }});
   layer.on('clustermouseout', function (ev) {{
+    if (clusterTimer !== null) {{
+      window.clearTimeout(clusterTimer);
+      clusterTimer = null;
+    }}
     const cluster = ev.layer;
     cluster.closeTooltip();
     cluster.unbindTooltip();
@@ -542,7 +597,13 @@ L.tileLayer('{tile_url}', {{
 }}).addTo(map);
 
 const markerById = {{}};
-const useCluster = {cluster_flag};
+const dashboardObjectCount = dashboardObjectCountFromMarkers(markers);
+const hoverDelayMs = (dashHover && dashboardObjectCount > 40) ? 1000 : 0;
+const useClusterRequested = {cluster_flag};
+const useCluster = useClusterRequested && typeof L.markerClusterGroup === 'function';
+if (useClusterRequested && !useCluster) {{
+  console.warn('Leaflet.markercluster не загружен, продолжаем без кластеризации');
+}}
 const clusterOpts = {{
   chunkedLoading: true,
   showCoverageOnHover: false,
@@ -559,7 +620,7 @@ const featureGroup = useCluster
   : L.featureGroup().addTo(map);
 
 if (useCluster && dashHover) {{
-  bindClusterDashboardHover(featureGroup);
+  bindClusterDashboardHover(featureGroup, hoverDelayMs);
   bindClusterDashboardClick(featureGroup);
 }}
 
@@ -621,7 +682,7 @@ function addMarker(m) {{
   }});
   marker._meta = m;
   marker.bindPopup(buildPopup(m), {{ className: 'cam-popup' }});
-  attachDashboardHover(marker, m);
+  attachDashboardHover(marker, m, hoverDelayMs);
   marker.on('dblclick', function (ev) {{
     L.DomEvent.stopPropagation(ev);
     if (m.kind === 'object') {{ return; }}
@@ -670,6 +731,34 @@ if _WEBENGINE and QWebEnginePage is not None:
 
         camera_open_requested = Signal(int)
         object_open_requested = Signal(int)
+
+        def createStandardContextMenu(self):  # noqa: N802
+            """Русифицированное контекстное меню карты (ПКМ)."""
+            menu = QMenu()
+            back = self.action(QWebEnginePage.WebAction.Back)
+            forward = self.action(QWebEnginePage.WebAction.Forward)
+            reload = self.action(QWebEnginePage.WebAction.Reload)
+            save_page = self.action(QWebEnginePage.WebAction.SavePage)
+            view_source = self.action(QWebEnginePage.WebAction.ViewSource)
+
+            if back is not None:
+                back.setText("Назад")
+                menu.addAction(back)
+            if forward is not None:
+                forward.setText("Вперёд")
+                menu.addAction(forward)
+            if reload is not None:
+                reload.setText("Обновить")
+                menu.addAction(reload)
+            menu.addSeparator()
+            if save_page is not None:
+                save_page.setText("Сохранить страницу")
+                menu.addAction(save_page)
+            menu.addSeparator()
+            if view_source is not None:
+                view_source.setText("Исходный код страницы")
+                menu.addAction(view_source)
+            return menu
 
         def acceptNavigationRequest(self, url: QUrl, _type, _is_main_frame) -> bool:  # noqa: D401
             if url.scheme() == OPEN_SCHEME:

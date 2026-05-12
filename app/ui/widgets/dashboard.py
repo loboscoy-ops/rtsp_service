@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import random
 from typing import Iterable
 
 from PySide6.QtCore import Qt, Signal
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app import config
 from app.database.models import CameraModel, ObjectModel
 from app.database.repository import Repository
 from app.ui.constants import (
@@ -56,6 +58,100 @@ def _object_uin(cameras: Iterable[CameraModel]) -> str:
         if (c.uin or "").strip():
             return c.uin.strip()
     return ""
+
+
+def _fallback_source_camera() -> CameraModel:
+    return CameraModel(
+        id=1,
+        object_id=1,
+        object_name="Источник",
+        camera_identifier="SRC-001",
+        camera_name="Тестовая камера",
+        group_name="Тип 1",
+        gps_coords="55.751244, 37.618423",
+        uin="63746324н98",
+        rtsp_url="rtsp://127.0.0.1:8554/test",
+        enabled=True,
+        status="online",
+        last_seen_online_at=None,
+        last_checked_at=None,
+        last_error=None,
+        created_at="2026-01-01 00:00:00",
+        updated_at="2026-01-01 00:00:00",
+    )
+
+
+def build_test_design_emulation(
+    source_cameras: list[CameraModel],
+) -> tuple[list[ObjectModel], list[CameraModel]]:
+    """Собрать тестовый набор: 400 площадок по 6-10 камер для дашборда."""
+    rng = random.Random(100169)
+    pool = source_cameras[:] if source_cameras else [_fallback_source_camera()]
+    objects: list[ObjectModel] = []
+    cameras: list[CameraModel] = []
+    cam_id = 1
+    now = "2026-01-01 00:00:00"
+
+    for obj_idx in range(1, config.TEST_DESIGN_OBJECTS + 1):
+        object_id = 100000 + obj_idx
+        obj_name = f"Тест: УИН 63746324н98 #{obj_idx:03d}"
+        uin = f"63746324н98-{obj_idx:03d}"
+        cam_count = rng.randint(
+            config.TEST_DESIGN_CAMERAS_MIN,
+            config.TEST_DESIGN_CAMERAS_MAX,
+        )
+        # Широкое рассеивание по карте.
+        center_lat = 54.0 + rng.random() * 4.0
+        center_lon = 35.0 + rng.random() * 8.0
+        online_count = 0
+        offline_count = 0
+
+        for cam_idx in range(1, cam_count + 1):
+            base = pool[rng.randrange(len(pool))]
+            status = "online" if rng.random() < 0.72 else "offline"
+            if status == "online":
+                online_count += 1
+            else:
+                offline_count += 1
+            lat = center_lat + rng.uniform(-0.018, 0.018)
+            lon = center_lon + rng.uniform(-0.018, 0.018)
+            cameras.append(
+                CameraModel(
+                    id=cam_id,
+                    object_id=object_id,
+                    object_name=obj_name,
+                    camera_identifier=f"T{obj_idx:03d}-{cam_idx:02d}",
+                    camera_name=base.camera_name or f"Камера {cam_idx}",
+                    group_name=base.group_name or "Тип 1",
+                    gps_coords=f"{lat:.6f}, {lon:.6f}",
+                    uin=uin,
+                    rtsp_url=base.rtsp_url,
+                    enabled=True,
+                    status=status,
+                    last_seen_online_at=(now if status == "online" else None),
+                    last_checked_at=now,
+                    last_error=("0x00 Эмуляция offline" if status == "offline" else None),
+                    created_at=now,
+                    updated_at=now,
+                    last_ping_ok=(True if status == "online" else False),
+                    last_ping_ms=(rng.randint(9, 40) if status == "online" else None),
+                )
+            )
+            cam_id += 1
+
+        objects.append(
+            ObjectModel(
+                id=object_id,
+                name=obj_name,
+                created_at=now,
+                updated_at=now,
+                camera_count=cam_count,
+                online_count=online_count,
+                offline_count=offline_count,
+            )
+        )
+
+    return objects, cameras
 
 
 class _Donut(QWidget):
@@ -108,7 +204,8 @@ class _Donut(QWidget):
 
             font = painter.font()
             font.setBold(True)
-            font.setPointSize(9 if self._size <= 56 else 11)
+            # Цифра проблемных камер в центре пончика уменьшена примерно на 30%.
+            font.setPointSize(13 if self._size <= 56 else 15)
             painter.setFont(font)
             if total == 0:
                 painter.setPen(QColor(THEME_FG))
@@ -181,7 +278,9 @@ class _SiteCard(QFrame):
         outer.addLayout(donut_col)
 
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # Позволяем карточке расти по высоте, чтобы длинные названия объектов
+        # не обрезались.
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
         self._accent = ""
         self.set_data(obj, cameras_for_obj)
@@ -233,6 +332,7 @@ class DashboardView(QWidget):
     def __init__(self, repo: Repository, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.repo = repo
+        self._test_payload: tuple[list[ObjectModel], list[CameraModel]] | None = None
 
         self.setStyleSheet(f"DashboardView {{ background-color: {THEME_BG_WINDOW}; }}")
 
@@ -267,7 +367,7 @@ class DashboardView(QWidget):
             f" border-left: 1px solid {THEME_BORDER};"
             "}"
         )
-        side.setFixedWidth(300)
+        side.setFixedWidth(320)
 
         side_layout = QVBoxLayout(side)
         side_layout.setContentsMargins(12, 10, 12, 10)
@@ -304,11 +404,20 @@ class DashboardView(QWidget):
     # ------------------------------------------------------------------
 
     def refresh(self) -> None:
-        try:
-            objects = self.repo.list_objects()
-            cameras = self.repo.list_cameras()
-        except Exception:
-            return
+        if config.TEST_DESIGN_EMULATION:
+            if self._test_payload is None:
+                try:
+                    source = self.repo.list_cameras()
+                except Exception:
+                    source = []
+                self._test_payload = build_test_design_emulation(source)
+            objects, cameras = self._test_payload
+        else:
+            try:
+                objects = self.repo.list_objects()
+                cameras = self.repo.list_cameras()
+            except Exception:
+                return
 
         # Раньше дашборд показывал по одному маркеру на площадку (с цифрой
         # «сколько камер»). Пользователь попросил видеть именно камеры, а не

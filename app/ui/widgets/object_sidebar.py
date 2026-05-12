@@ -75,6 +75,7 @@ class ObjectSidebar(QListWidget):
     object_selected = Signal(int)
     delete_requested = Signal(int)
     rename_requested = Signal(int)
+    check_status_requested = Signal(int)
 
     def __init__(self):
         super().__init__()
@@ -155,6 +156,10 @@ class ObjectSidebar(QListWidget):
             return
         obj_id = int(item.data(Qt.ItemDataRole.UserRole))
         menu = QMenu(self)
+        check_act = QAction("Проверить статус", menu)
+        check_act.triggered.connect(lambda: self.check_status_requested.emit(obj_id))
+        menu.addAction(check_act)
+        menu.addSeparator()
         rename_act = QAction("Переименовать (F2)", menu)
         rename_act.triggered.connect(lambda: self.rename_requested.emit(obj_id))
         menu.addAction(rename_act)
