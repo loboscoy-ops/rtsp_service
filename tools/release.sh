@@ -68,7 +68,7 @@ API="https://api.github.com/repos/${REPO_SLUG}"
 UPLOADS="https://uploads.github.com/repos/${REPO_SLUG}"
 
 if [ -z "${NOTES}" ]; then
-    NOTES="RTSP Camera Monitor ${TAG} (${ARCH}). Установка: смонтируйте .dmg и перетащите .app в /Applications. Для существующих установок обновление произойдёт автоматически по нажатию зелёной кнопки «Обновить»."
+    NOTES="Urus Camera Monitor ${TAG} (${ARCH}). Установка: смонтируйте .dmg и перетащите .app в /Applications."
 fi
 
 # --- ищем или создаём релиз -------------------------------------------------

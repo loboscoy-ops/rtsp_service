@@ -9,7 +9,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-APP_NAME="RTSP Camera Monitor"
+APP_NAME="Urus Camera Monitor"
 ENTRY="app/main.py"
 ARCH="$(uname -m)"
 VERSION="$(python3 -c 'from app import config; print(config.APP_VERSION)')"

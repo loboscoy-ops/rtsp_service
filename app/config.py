@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 
-APP_NAME = "RTSP Camera Monitor"
+APP_NAME = "Urus Camera Monitor"
 APP_VERSION = "0.1.46"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -28,7 +28,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _find_project_git_dir() -> Path | None:
-    """Где брать .git для кнопки 'Обновить из GitHub'."""
+    """Где искать .git репозитория проекта (для служебных сценариев)."""
     candidates = []
     env_dir = os.getenv("RTSP_PROJECT_DIR", "").strip()
     if env_dir:

@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-
-import pandas as pd
+from typing import Iterable
 
 from app import config
 from app.database.repository import Repository
@@ -122,42 +121,84 @@ class ImportService:
 
     @staticmethod
     def _clean_cell(value: object) -> str:
+        """Быстрая нормализация ячейки без обращений к pandas.
+
+        ``openpyxl`` уже отдаёт ``None`` для пустых ячеек и числа/datetime —
+        в native-типах. Дергать ``pd.isna`` на каждую ячейку дорого, поэтому
+        импорт раньше «жил» долго на больших листах.
+        """
         if value is None:
             return ""
-        try:
-            if pd.isna(value):
+        if isinstance(value, float):
+            # NaN — единственное float, которое != самому себе.
+            if value != value:  # noqa: PLR0124
                 return ""
-        except Exception:
-            pass
+            if value.is_integer():
+                return str(int(value)).strip()
+            return repr(value).strip()
+        if isinstance(value, str):
+            return value.strip()
         return str(value).strip()
 
-    @staticmethod
-    def _engine_for(path: Path) -> str:
+    def list_sheet_names(self, path: Path) -> list[str]:
+        """Лёгкая операция: получить только имена листов без чтения данных."""
         suffix = path.suffix.lower()
         if suffix == ".xls":
-            return "xlrd"
-        return "openpyxl"
+            import xlrd  # type: ignore
+
+            book = xlrd.open_workbook(str(path), on_demand=True)
+            try:
+                return list(book.sheet_names())
+            finally:
+                book.release_resources()
+        from openpyxl import load_workbook
+
+        wb = load_workbook(filename=str(path), read_only=True, data_only=True)
+        try:
+            return list(wb.sheetnames)
+        finally:
+            wb.close()
+
+    def read_sheet(self, path: Path, name: str) -> SheetData:
+        """Прочитать содержимое одного листа максимально дёшево."""
+        suffix = path.suffix.lower()
+        clean = self._clean_cell
+        if suffix == ".xls":
+            import xlrd  # type: ignore
+
+            book = xlrd.open_workbook(str(path), on_demand=True)
+            try:
+                sheet = book.sheet_by_name(name)
+                rows: list[list[str]] = []
+                for r in range(sheet.nrows):
+                    row = [clean(sheet.cell_value(r, c)) for c in range(sheet.ncols)]
+                    rows.append(row)
+            finally:
+                book.release_resources()
+        else:
+            from openpyxl import load_workbook
+
+            wb = load_workbook(filename=str(path), read_only=True, data_only=True)
+            try:
+                sheet = wb[name]
+                rows = []
+                for raw_row in sheet.iter_rows(values_only=True):
+                    rows.append([clean(c) for c in raw_row])
+            finally:
+                wb.close()
+
+        # Срезаем пустой «хвост» (типичная проблема Excel-файлов с лишними строками).
+        while rows and not any(c for c in rows[-1]):
+            rows.pop()
+        return SheetData(name=name, rows=rows)
 
     def list_sheets(self, path: Path) -> list[SheetData]:
-        sheets: list[SheetData] = []
-        engine = self._engine_for(path)
-        with pd.ExcelFile(path, engine=engine) as xls:
-            for name in xls.sheet_names:
-                df = pd.read_excel(
-                    xls,
-                    sheet_name=name,
-                    header=None,
-                    dtype=str,
-                    engine=engine,
-                )
-                rows = [
-                    [self._clean_cell(c) for c in row]
-                    for row in df.itertuples(index=False, name=None)
-                ]
-                while rows and not any(c for c in rows[-1]):
-                    rows.pop()
-                sheets.append(SheetData(name=name, rows=rows))
-        return sheets
+        """Совместимое API: читает все листы.
+
+        Используйте :meth:`list_sheet_names` + :meth:`read_sheet` для отложенной
+        загрузки — это намного быстрее для больших книг.
+        """
+        return [self.read_sheet(path, name) for name in self.list_sheet_names(path)]
 
     def refine_identifier_mapping(
         self,
@@ -407,21 +448,20 @@ class ImportService:
         return preview
 
     def import_valid_rows(self, preview: ImportPreview) -> tuple[int, int]:
-        created = 0
-        updated = 0
-        for row in preview.valid_rows:
-            _, action = self.repository.upsert_camera_for_object_name(
-                object_name=row.object_name,
-                camera_identifier=row.camera_identifier,
-                camera_name=row.camera_name,
-                group_name=row.group_name,
-                rtsp_url=row.rtsp_url,
-                enabled=row.enabled,
-                gps_coords=row.gps_coords,
-                uin=row.uin,
-            )
-            if action == "created":
-                created += 1
-            else:
-                updated += 1
-        return created, updated
+        valid = preview.valid_rows
+        if not valid:
+            return 0, 0
+        rows_payload: Iterable[dict] = (
+            {
+                "object_name": row.object_name,
+                "camera_identifier": row.camera_identifier,
+                "camera_name": row.camera_name,
+                "group_name": row.group_name,
+                "rtsp_url": row.rtsp_url,
+                "enabled": row.enabled,
+                "gps_coords": row.gps_coords,
+                "uin": row.uin,
+            }
+            for row in valid
+        )
+        return self.repository.bulk_upsert_cameras(rows_payload)

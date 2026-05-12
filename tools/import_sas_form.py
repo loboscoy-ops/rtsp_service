@@ -98,7 +98,7 @@ def adapt(input_path: Path) -> list[dict]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Импорт формы САС в RTSP Camera Monitor")
+    ap = argparse.ArgumentParser(description="Импорт формы САС в Urus Camera Monitor")
     ap.add_argument("path", help="Путь к XLSX")
     ap.add_argument(
         "--save-adapted",

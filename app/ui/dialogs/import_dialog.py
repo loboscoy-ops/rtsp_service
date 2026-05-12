@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QRunnable, QThreadPool, Signal
+from PySide6.QtCore import QRunnable, QThreadPool, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -66,7 +66,8 @@ class _Job(QRunnable):
 
 class ImportDialog(QDialog):
     import_completed = Signal(int, int)
-    _sheets_loaded = Signal(object)
+    _sheet_names_loaded = Signal(object)
+    _sheet_loaded = Signal(object)
     _preview_ready = Signal(object)
     _import_done = Signal(object)
     _job_failed = Signal(str)
@@ -78,14 +79,23 @@ class ImportDialog(QDialog):
         self.import_service = import_service
         self.template_service = template_service
         self.file_path: Path | None = None
-        self.sheets: list[SheetData] = []
+        self.sheet_names: list[str] = []
+        self._sheet_cache: dict[str, SheetData] = {}
         self.current_sheet: SheetData | None = None
         self.preview: ImportPreview | None = None
         self.pool = QThreadPool.globalInstance()
         self._summary_cache = ""
         self._mapping_combos: dict[str, QComboBox] = {}
 
-        self._sheets_loaded.connect(self._on_sheets_loaded)
+        # Дебаунс пересчёта превью при правке маппинга — не пересчитываем
+        # на каждое срабатывание currentIndexChanged.
+        self._auto_preview_timer = QTimer(self)
+        self._auto_preview_timer.setSingleShot(True)
+        self._auto_preview_timer.setInterval(250)
+        self._auto_preview_timer.timeout.connect(self._run_auto_preview)
+
+        self._sheet_names_loaded.connect(self._on_sheet_names_loaded)
+        self._sheet_loaded.connect(self._on_sheet_loaded)
         self._preview_ready.connect(self._on_preview_ready)
         self._import_done.connect(self._on_import_done)
         self._job_failed.connect(self._on_job_error)
@@ -181,6 +191,8 @@ class ImportDialog(QDialog):
         self.file_path = Path(path)
         self.file_label.setText(str(self.file_path))
         self.preview = None
+        self.current_sheet = None
+        self._sheet_cache.clear()
         self.table.setRowCount(0)
         self.summary_label.setText("Чтение листов...")
         self._summary_cache = ""
@@ -189,33 +201,61 @@ class ImportDialog(QDialog):
         target = self.file_path
 
         def _task():
-            return self.import_service.list_sheets(target)
+            # Берём только список имён — это сильно быстрее, чем читать все листы.
+            return self.import_service.list_sheet_names(target)
 
-        self.pool.start(_Job(_task, self._sheets_loaded, self._job_failed))
+        self.pool.start(_Job(_task, self._sheet_names_loaded, self._job_failed))
 
-    def _on_sheets_loaded(self, sheets_obj: object) -> None:
-        self._set_busy(False)
-        self.sheets = list(sheets_obj)  # type: ignore[arg-type]
+    def _on_sheet_names_loaded(self, names_obj: object) -> None:
+        self.sheet_names = list(names_obj)  # type: ignore[arg-type]
         self.sheet_combo.blockSignals(True)
         self.sheet_combo.clear()
-        for s in self.sheets:
-            rows = len(s.rows)
-            cols = max((len(r) for r in s.rows), default=0)
-            self.sheet_combo.addItem(f"{s.name}  ({rows}×{cols})", s.name)
+        for name in self.sheet_names:
+            self.sheet_combo.addItem(name, name)
         self.sheet_combo.blockSignals(False)
-        if self.sheets:
+        if self.sheet_names:
             self.sheet_combo.setCurrentIndex(0)
             self._on_sheet_changed(0)
         else:
+            self._set_busy(False)
             self.summary_label.setText("В файле нет листов")
 
     def _on_sheet_changed(self, _idx: int) -> None:
         name = self.sheet_combo.currentData()
-        self.current_sheet = next((s for s in self.sheets if s.name == name), None)
-        if not self.current_sheet:
+        if not name or not self.file_path:
             return
-        max_header = max(1, len(self.current_sheet.rows))
-        detected_idx = self.import_service.detect_header_row(self.current_sheet.rows)
+        cached = self._sheet_cache.get(name)
+        if cached is not None:
+            self.current_sheet = cached
+            self._apply_current_sheet()
+            return
+        self._set_busy(True)
+        target_path = self.file_path
+        target_name = name
+
+        def _task():
+            return self.import_service.read_sheet(target_path, target_name)
+
+        self.pool.start(_Job(_task, self._sheet_loaded, self._job_failed))
+
+    def _on_sheet_loaded(self, sheet_obj: object) -> None:
+        sheet: SheetData = sheet_obj  # type: ignore[assignment]
+        self._sheet_cache[sheet.name] = sheet
+        self.current_sheet = sheet
+        self._apply_current_sheet()
+
+    def _apply_current_sheet(self) -> None:
+        self._set_busy(False)
+        sheet = self.current_sheet
+        if sheet is None:
+            return
+        rows_n = len(sheet.rows)
+        cols_n = max((len(r) for r in sheet.rows), default=0)
+        idx = self.sheet_combo.currentIndex()
+        if idx >= 0:
+            self.sheet_combo.setItemText(idx, f"{sheet.name}  ({rows_n}×{cols_n})")
+        max_header = max(1, rows_n)
+        detected_idx = self.import_service.detect_header_row(sheet.rows)
         self.header_spin.blockSignals(True)
         self.header_spin.setMaximum(max_header)
         self.header_spin.setValue(min(detected_idx + 1, max_header))
@@ -263,6 +303,13 @@ class ImportDialog(QDialog):
         self._schedule_auto_preview()
 
     def _schedule_auto_preview(self) -> None:
+        if not self.current_sheet:
+            return
+        # Дебаунс: при перевыставлении нескольких комбобоксов запускаем
+        # тяжёлый build_preview только один раз.
+        self._auto_preview_timer.start()
+
+    def _run_auto_preview(self) -> None:
         if not self.current_sheet:
             return
         mapping = self._current_mapping()

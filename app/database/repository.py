@@ -295,6 +295,93 @@ class Repository:
             conn.execute("UPDATE objects SET updated_at = ? WHERE id = ?", (ts, object_id))
             return int(cur.lastrowid), "created"
 
+    def bulk_upsert_cameras(self, rows) -> tuple[int, int]:
+        """Пакетный upsert набора камер за одно подключение/транзакцию.
+
+        Объекты создаются по уникальным именам, ``object_id`` кэшируются,
+        что устраняет N открытий SQLite на каждую строку при импорте больших
+        Excel-файлов.
+        """
+        rows = list(rows)
+        if not rows:
+            return 0, 0
+        created = 0
+        updated = 0
+        ts = now_iso()
+        with get_connection() as conn:
+            object_id_cache: dict[str, int] = {
+                str(r["name"]): int(r["id"])
+                for r in conn.execute("SELECT id, name FROM objects").fetchall()
+            }
+
+            select_sql = (
+                "SELECT id FROM cameras WHERE object_id = ? AND camera_identifier = ?"
+            )
+            update_sql = (
+                "UPDATE cameras SET camera_name = ?, group_name = ?, gps_coords = ?, "
+                "uin = ?, rtsp_url = ?, enabled = ?, updated_at = ? WHERE id = ?"
+            )
+            insert_sql = (
+                "INSERT INTO cameras("
+                "  object_id, camera_identifier, camera_name, group_name, gps_coords, uin,"
+                "  rtsp_url, enabled, status, last_seen_online_at, last_checked_at,"
+                "  last_error, created_at, updated_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+            )
+            insert_object_sql = (
+                "INSERT INTO objects(name, created_at, updated_at) VALUES(?,?,?)"
+            )
+
+            touched_object_ids: set[int] = set()
+
+            for row in rows:
+                object_name = str(row.get("object_name", "")).strip()
+                if not object_name:
+                    continue
+                object_id = object_id_cache.get(object_name)
+                if object_id is None:
+                    cur = conn.execute(insert_object_sql, (object_name, ts, ts))
+                    object_id = int(cur.lastrowid)
+                    object_id_cache[object_name] = object_id
+
+                identifier = str(row.get("camera_identifier", "")).strip()
+                params_common = (
+                    str(row.get("camera_name", "")).strip(),
+                    str(row.get("group_name", "")).strip(),
+                    str(row.get("gps_coords", "")).strip(),
+                    str(row.get("uin", "")).strip(),
+                    str(row.get("rtsp_url", "")).strip(),
+                    int(bool(row.get("enabled", True))),
+                )
+
+                existing = conn.execute(select_sql, (object_id, identifier)).fetchone()
+                if existing:
+                    conn.execute(update_sql, (*params_common, ts, int(existing["id"])))
+                    updated += 1
+                else:
+                    conn.execute(
+                        insert_sql,
+                        (
+                            object_id,
+                            identifier,
+                            *params_common,
+                            "unknown",
+                            None,
+                            None,
+                            None,
+                            ts,
+                            ts,
+                        ),
+                    )
+                    created += 1
+                touched_object_ids.add(object_id)
+
+            for obj_id in touched_object_ids:
+                conn.execute(
+                    "UPDATE objects SET updated_at = ? WHERE id = ?", (ts, obj_id)
+                )
+        return created, updated
+
     def bulk_update_field(self, camera_ids: list[int], field: str, value) -> int:
         """Массовое обновление одного поля у камер. Возвращает число затронутых строк."""
         allowed = {"group_name", "gps_coords", "uin", "enabled", "object_id"}

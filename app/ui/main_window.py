@@ -3,10 +3,8 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
-import sys
 import traceback
 from datetime import datetime
-from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import Qt, QThreadPool, QTimer
@@ -19,7 +17,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
-    QProgressDialog,
     QPushButton,
     QSplitter,
     QStatusBar,
@@ -34,26 +31,14 @@ from app.database.models import CameraModel, ObjectModel
 from app.database.repository import Repository
 from app.services.camera_checker import CameraChecker, CheckResult
 from app.services.ffplay_service import FFPlayService
-from app.services.git_service import GitPullService
-from app.services.release_service import (
-    RELEASES_PAGE_URL,
-    ReleaseService,
-    fetch_remote_version,
-    pick_release_for_upgrade,
-)
 from app.services.import_service import ImportService
 from app.services.template_service import TemplateService
 from app.ui.constants import (
     CHECK_TIMER_MIN_INTERVAL_SEC,
     ERROR_PANE_QSS,
     FFPLAY_FOCUS_DELAY_MS,
-    GIT_BTN_HAS_UPDATES_QSS,
-    GIT_PULL_DIALOG_LIMIT,
-    GIT_PULL_LOG_LIMIT,
     BOTTOM_SPLITTER_DEFAULT_SIZES,
     CAMERAS_SPLITTER_DEFAULT_SIZES,
-    GIT_UPDATE_CHECK_INTERVAL_MS,
-    GIT_UPDATE_FIRST_CHECK_DELAY_MS,
     LOGO_HEIGHT_PX,
     REFRESH_DEBOUNCE_MS,
     RIGHT_PANE_DEFAULT_WIDTH,
@@ -66,7 +51,6 @@ from app.ui.constants import (
 )
 from app.ui.dialogs.camera_dialog import CameraDialog
 from app.ui.dialogs.import_dialog import ImportDialog
-from app.ui.dialogs.map_dialog import MapDialog
 from app.ui.dialogs.object_dialog import ObjectDialog
 from app.ui.widgets.camera_map import CameraMapView
 from app.ui.widgets.camera_table import CameraTable
@@ -85,12 +69,7 @@ class MainWindow(QMainWindow):
         self.checker = CameraChecker()
         self.import_service = ImportService(self.repo)
         self.template_service = TemplateService()
-        self._git_service: Optional[GitPullService] = None
-        self._release_service: Optional[ReleaseService] = None
-        self._latest_remote_version: Optional[str] = None
         self._closing = False
-        self._update_progress: Optional[QProgressDialog] = None
-        self._update_target_tag: Optional[str] = None
 
         self.current_object_id: Optional[int] = None
         self.objects_cache: list[ObjectModel] = []
@@ -102,10 +81,10 @@ class MainWindow(QMainWindow):
         # Дедуплицируется автоматически: повторные провалы той же камеры
         # не дублируются, а уход в online — убирает запись.
         self._camera_errors: dict[int, str] = {}
-        # Прочие разовые ошибки (FFPLAY/IMPORT/GIT…) — список с временем.
+        # Прочие разовые ошибки (FFPLAY/IMPORT…) — список с временем.
         self._misc_errors: list[str] = []
 
-        self.setWindowTitle(f"{config.APP_NAME} {config.APP_VERSION}")
+        self.setWindowTitle(f"{config.APP_NAME} v.{config.APP_VERSION}")
         self.resize(*WINDOW_DEFAULT_SIZE)
 
         self._setup_ui()
@@ -126,7 +105,6 @@ class MainWindow(QMainWindow):
         self._refresh_debounce.timeout.connect(self._refresh_views_after_checks)
 
         self._setup_shortcuts()
-        self._setup_git_update_watcher()
 
     # ==================================================================
     # UI assembly
@@ -156,18 +134,6 @@ class MainWindow(QMainWindow):
         self.check_all_btn = self._add_toolbar_button(
             toolbar, "Проверить все (⌘R)", self._manual_check_all,
             tooltip="Проверить все камеры всех объектов (⌘R)",
-        )
-        self.git_btn = self._add_toolbar_button(
-            toolbar, "Обновить из GitHub", self._git_pull_from_github,
-            tooltip="git pull --ff-only origin main",
-        )
-        self._git_btn_default_style = self.git_btn.styleSheet()
-        self._pending_updates_count = 0
-        self._add_toolbar_button(
-            toolbar,
-            "Карта",
-            self._open_map_dialog,
-            tooltip="Карта камер по координатам (как в таблице, № совпадает)",
         )
 
         toolbar.addSeparator()
@@ -328,7 +294,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(message, STATUS_BAR_MESSAGE_MS)
 
     def _log_error(self, message: str) -> None:
-        """Разовая ошибка не от проверки камер (FFPLAY/IMPORT/GIT…)."""
+        """Разовая ошибка не от проверки камер (FFPLAY/IMPORT…)."""
         _log.warning("%s", message)
         if self._closing:
             return
@@ -827,24 +793,6 @@ class MainWindow(QMainWindow):
     def _on_rtsp_copied(self, url: str) -> None:
         self._log(f"RTSP-ссылка скопирована: {mask_rtsp_url(url)}")
 
-    def _open_map_dialog(self) -> None:
-        if not self.cameras_cache:
-            QMessageBox.information(self, "Карта", "Нет камер в текущем списке.")
-            return
-        obj = self._selected_object()
-        label = obj.name if obj else "объект не выбран"
-        try:
-            dlg = MapDialog(self.cameras_cache, object_label=label, parent=self)
-            dlg.open_camera_requested.connect(self._open_camera_stream)
-            dlg.exec()
-        except Exception as exc:
-            tb = traceback.format_exc()
-            self._log(f"Ошибка открытия карты: {exc}")
-            self._log_error(f"MAP: {exc}")
-            QMessageBox.critical(
-                self, "Карта", f"Не удалось открыть карту:\n{exc}\n\n{tb}",
-            )
-
     # ==================================================================
     # import dialog
     # ==================================================================
@@ -869,14 +817,12 @@ class MainWindow(QMainWindow):
         self._log(f"Импорт завершен. Создано={created}, обновлено={updated}")
 
     # ==================================================================
-    # close / git
+    # close
     # ==================================================================
 
     def closeEvent(self, event) -> None:
         self._closing = True
         self.timer.stop()
-        if getattr(self, "_git_check_timer", None) is not None:
-            self._git_check_timer.stop()
         self._refresh_debounce.stop()
 
         self._disconnect_background_slots()
@@ -914,378 +860,3 @@ class MainWindow(QMainWindow):
                 sig.disconnect(slot)
             except TypeError:
                 pass
-        if self._git_service is not None:
-            for sig, slot in (
-                (self._git_service.finished, self._on_git_pull_done),
-                (self._git_service.updates_checked, self._on_git_updates_checked),
-            ):
-                try:
-                    sig.disconnect(slot)
-                except TypeError:
-                    pass
-        if self._release_service is not None:
-            for sig, slot in (
-                (self._release_service.version_checked, self._on_remote_version_checked),
-                (self._release_service.install_finished, self._on_release_install_done),
-                (self._release_service.download_progress, self._on_release_download_progress),
-                (self._release_service.install_stage, self._on_release_install_stage),
-            ):
-                try:
-                    sig.disconnect(slot)
-                except TypeError:
-                    pass
-
-    # ==================================================================
-    # GitHub: фоновая проверка обновлений + ручной pull + автоперезапуск
-    # ==================================================================
-
-    def _ensure_git_service(self) -> Optional[GitPullService]:
-        if config.PROJECT_GIT_DIR is None:
-            return None
-        if self._git_service is None:
-            self._git_service = GitPullService(self)
-            self._git_service.finished.connect(self._on_git_pull_done)
-            self._git_service.updates_checked.connect(self._on_git_updates_checked)
-        return self._git_service
-
-    def _ensure_release_service(self) -> ReleaseService:
-        if self._release_service is None:
-            self._release_service = ReleaseService(self)
-            self._release_service.version_checked.connect(self._on_remote_version_checked)
-            self._release_service.install_finished.connect(self._on_release_install_done)
-            self._release_service.download_progress.connect(self._on_release_download_progress)
-            self._release_service.install_stage.connect(self._on_release_install_stage)
-        return self._release_service
-
-    def _setup_git_update_watcher(self) -> None:
-        # Frozen .app: git pull исходников ничего не меняет в собранном
-        # бандле, поэтому смотрим APP_VERSION в репозитории и при наличии
-        # релиза скачиваем .dmg. В dev-режиме — обычный git pull.
-        if config.IS_FROZEN:
-            self._ensure_release_service()
-        else:
-            if self._ensure_git_service() is None:
-                return
-        self._git_check_timer = QTimer(self)
-        self._git_check_timer.setInterval(GIT_UPDATE_CHECK_INTERVAL_MS)
-        self._git_check_timer.timeout.connect(self._check_git_updates)
-        self._git_check_timer.start()
-        QTimer.singleShot(GIT_UPDATE_FIRST_CHECK_DELAY_MS, self._check_git_updates)
-
-    def _check_git_updates(self) -> None:
-        if config.IS_FROZEN:
-            self._ensure_release_service().check()
-            return
-        svc = self._ensure_git_service()
-        if svc is not None:
-            svc.check_updates()
-
-    def _on_remote_version_checked(self, remote: str, is_newer: bool, error: str) -> None:
-        if self._closing:
-            return
-        if error:
-            self._log(f"github: проверка версии не удалась — {error}")
-            return
-        self._latest_remote_version = remote or None
-        self._pending_updates_count = 1 if is_newer else 0
-        self._apply_git_btn_state()
-
-    def _on_git_updates_checked(self, count: int, message: str) -> None:
-        if self._closing:
-            return
-        # count == -1 → ошибка проверки, не трогаем подсветку, но логируем тихо.
-        if count < 0:
-            self._log(f"git: фоновая проверка обновлений не удалась — {message}")
-            return
-        self._pending_updates_count = count
-        self._apply_git_btn_state()
-
-    def _apply_git_btn_state(self) -> None:
-        if self._closing:
-            return
-        count = self._pending_updates_count
-        if count > 0:
-            if config.IS_FROZEN and self._latest_remote_version:
-                label = f"Обновить до v{self._latest_remote_version}"
-                tip = (
-                    f"Доступна новая версия v{self._latest_remote_version} "
-                    f"(сейчас {config.APP_VERSION}).\n"
-                    "Нажмите, чтобы скачать и установить .dmg."
-                )
-            else:
-                label = f"Обновить из GitHub ● {count}"
-                tip = (
-                    f"Доступно новых коммитов в origin/main: {count}\n"
-                    "Нажмите, чтобы выполнить git pull --ff-only"
-                )
-            self.git_btn.setText(label)
-            self.git_btn.setStyleSheet(GIT_BTN_HAS_UPDATES_QSS)
-            self.git_btn.setToolTip(tip)
-        else:
-            self.git_btn.setText("Обновить из GitHub")
-            self.git_btn.setStyleSheet(self._git_btn_default_style)
-            if config.IS_FROZEN:
-                self.git_btn.setToolTip(
-                    f"Текущая версия v{config.APP_VERSION}.\n"
-                    "Проверка релизов в фоне каждые 10 мин."
-                )
-            else:
-                self.git_btn.setToolTip("git pull --ff-only origin main")
-
-    def _git_pull_from_github(self) -> None:
-        if config.IS_FROZEN:
-            self._update_from_release()
-            return
-
-        if config.PROJECT_GIT_DIR is None:
-            QMessageBox.information(
-                self, "GitHub",
-                (
-                    "Не найден git-репозиторий проекта на этом Mac.\n\n"
-                    "Чтобы кнопка обновляла код, выполните в терминале один раз:\n\n"
-                    f"  git clone {config.GITHUB_REPO_URL} ~/rtsp-camera-service\n\n"
-                    "После этого кнопка будет делать `git pull` в этом каталоге."
-                ),
-            )
-            return
-
-        svc = self._ensure_git_service()
-        if svc is None:
-            return
-        self.git_btn.setEnabled(False)
-        self._log(f"git pull в {config.PROJECT_GIT_DIR}...")
-        svc.start()
-
-    def _update_from_release(self) -> None:
-        """Frozen .app: подтягиваем .dmg из GitHub Releases (точный тег, не только «latest»)."""
-        rv = fetch_remote_version()
-        if rv.error:
-            QMessageBox.warning(
-                self, "Обновление",
-                f"Не удалось узнать актуальную версию на GitHub:\n{rv.error}",
-            )
-            return
-        if not rv.is_newer:
-            QMessageBox.information(
-                self, "Обновление",
-                f"Уже установлена актуальная версия v{config.APP_VERSION}.",
-            )
-            return
-
-        release = pick_release_for_upgrade(rv.version, config.APP_VERSION)
-        if release is None or not release.dmg_url:
-            QMessageBox.information(
-                self, "Обновление",
-                (
-                    f"В репозитории на GitHub уже v{rv.version}, но готового .dmg "
-                    f"для установки пока нет (последний релиз отстаёт).\n\n"
-                    f"Откройте страницу релизов и скачайте сборку вручную, когда появится:\n"
-                    f"{RELEASES_PAGE_URL}"
-                ),
-            )
-            return
-
-        question = (
-            f"Доступна новая версия v{release.tag} "
-            f"(сейчас v{config.APP_VERSION}, в main — v{rv.version}).\n\n"
-            "Сейчас приложение скачает свежий .dmg и заменит установленный .app, "
-            "а затем перезапустится. Продолжить?"
-        )
-        resp = QMessageBox.question(
-            self, "Обновление",
-            question,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-        if resp != QMessageBox.StandardButton.Yes:
-            return
-        self.git_btn.setEnabled(False)
-        self.git_btn.setText("Скачивание .dmg…")
-        self._log(f"Скачиваю .dmg для v{release.tag}: {release.dmg_url}")
-        self._update_target_tag = release.tag
-        self._show_update_progress(release.tag)
-        self._ensure_release_service().install(release.dmg_url)
-
-    def _show_update_progress(self, tag: str) -> None:
-        # Закрываем старый, если остался от предыдущей попытки.
-        self._close_update_progress()
-        dlg = QProgressDialog(
-            f"Подключение к GitHub для скачивания v{tag}…",
-            "",  # пустая подпись = без кнопки Cancel
-            0, 100, self,
-        )
-        dlg.setWindowTitle("Обновление")
-        dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
-        dlg.setMinimumDuration(0)
-        dlg.setAutoClose(False)
-        dlg.setAutoReset(False)
-        dlg.setCancelButton(None)
-        dlg.setValue(0)
-        dlg.show()
-        self._update_progress = dlg
-
-    def _close_update_progress(self) -> None:
-        if self._update_progress is not None:
-            try:
-                self._update_progress.close()
-            except RuntimeError:
-                pass
-            self._update_progress = None
-
-    @staticmethod
-    def _format_bytes(num: int) -> str:
-        if num < 0:
-            return "—"
-        for unit in ("B", "KB", "MB", "GB"):
-            if num < 1024 or unit == "GB":
-                return f"{num:.1f} {unit}" if unit != "B" else f"{num} B"
-            num /= 1024.0
-        return f"{num:.1f} GB"
-
-    def _on_release_download_progress(self, downloaded: int, total: int) -> None:
-        if self._closing or self._update_progress is None:
-            return
-        tag = self._update_target_tag or ""
-        if total > 0:
-            percent = max(0, min(100, int(downloaded * 100 / total)))
-            self._update_progress.setRange(0, 100)
-            self._update_progress.setValue(percent)
-            self._update_progress.setLabelText(
-                f"Скачивание v{tag}: {percent}% "
-                f"({self._format_bytes(downloaded)} из {self._format_bytes(total)})"
-            )
-        else:
-            # Сервер не отдал Content-Length — крутим бесконечный индикатор.
-            self._update_progress.setRange(0, 0)
-            self._update_progress.setLabelText(
-                f"Скачивание v{tag}: {self._format_bytes(downloaded)}"
-            )
-
-    def _on_release_install_stage(self, stage: str) -> None:
-        if self._closing or self._update_progress is None:
-            return
-        tag = self._update_target_tag or ""
-        if stage == "install":
-            self._update_progress.setRange(0, 0)
-            self._update_progress.setLabelText(
-                f"Установка v{tag} в /Applications…"
-            )
-        elif stage == "download":
-            self._update_progress.setRange(0, 100)
-            self._update_progress.setValue(0)
-            self._update_progress.setLabelText(
-                f"Скачивание v{tag}: подключение к серверу…"
-            )
-
-    def _on_release_install_done(self, ok: bool, message: str) -> None:
-        if self._closing:
-            return
-        self._close_update_progress()
-        self._update_target_tag = None
-        self.git_btn.setEnabled(True)
-        if not ok:
-            self._log_error(f"UPDATE: {message[:GIT_PULL_LOG_LIMIT]}")
-            QMessageBox.warning(
-                self, "Обновление",
-                f"Не удалось установить новую версию:\n{message}\n\n"
-                f"Можете скачать .dmg вручную: {RELEASES_PAGE_URL}",
-            )
-            self._apply_git_btn_state()
-            return
-        self._log(f"Новый .app установлен: {message}")
-        QMessageBox.information(
-            self, "Обновление",
-            "Новая версия установлена. Приложение сейчас перезапустится.",
-        )
-        self._restart_app()
-
-    @staticmethod
-    def _open_url_external(url: str) -> None:
-        try:
-            subprocess.Popen(["open", url], start_new_session=True)
-        except Exception:
-            pass
-
-    def _on_git_pull_done(self, ok: bool, message: str) -> None:
-        if self._closing:
-            return
-        self.git_btn.setEnabled(True)
-        text = message.strip()
-        log_message = ("OK: " if ok else "ERROR: ") + text
-        self._log(log_message)
-        if not ok:
-            self._log_error(f"GIT PULL: {text[:GIT_PULL_LOG_LIMIT]}")
-            QMessageBox.warning(self, "GitHub", text or "Не удалось обновить из GitHub")
-            return
-
-        had_updates = self._pending_updates_count > 0
-        self._pending_updates_count = 0
-        self._apply_git_btn_state()
-
-        if not had_updates and "Already up to date" in text:
-            # Кодовая база и так была актуальна — перезапуск не нужен.
-            QMessageBox.information(
-                self, "GitHub",
-                "Уже актуальная версия — обновлять нечего.\n\n"
-                + text[:GIT_PULL_DIALOG_LIMIT],
-            )
-            return
-
-        resp = QMessageBox.question(
-            self, "GitHub",
-            "Обновление из GitHub выполнено.\n\n"
-            + text[:GIT_PULL_DIALOG_LIMIT]
-            + "\n\nПерезапустить приложение сейчас, чтобы применить изменения?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-        if resp == QMessageBox.StandardButton.Yes:
-            self._restart_app()
-
-    def _restart_app(self) -> None:
-        """Стартует свежую копию приложения и закрывает текущую.
-
-        - Frozen .app: `open -n -a /Applications/RTSP Camera Monitor.app`
-        - Dev (`python -m app.main`): запускаем тот же интерпретатор.
-        """
-        try:
-            self.ffplay.terminate_all()
-        except Exception:
-            pass
-
-        try:
-            if config.IS_FROZEN:
-                exe = Path(sys.executable)
-                bundle = next(
-                    (p for p in exe.parents if p.suffix == ".app"),
-                    None,
-                )
-                if bundle is not None:
-                    subprocess.Popen(
-                        ["open", "-n", "-a", str(bundle)],
-                        start_new_session=True,
-                    )
-                else:
-                    subprocess.Popen([str(exe)], start_new_session=True)
-            else:
-                subprocess.Popen(
-                    [sys.executable, "-m", "app.main"],
-                    cwd=str(config.ROOT_DIR),
-                    start_new_session=True,
-                )
-        except Exception as exc:
-            self._log_error(f"RESTART: {exc}")
-            QMessageBox.warning(
-                self, "Перезапуск",
-                f"Не удалось перезапустить автоматически: {exc}\n"
-                "Закройте окно и откройте приложение вручную.",
-            )
-            return
-
-        # Даём событийному циклу 100 мс, чтобы новый процесс успел стартовать
-        # до того, как мы убьём текущий (важно для PyInstaller-bootstrap).
-        QTimer.singleShot(100, self._quit_app)
-
-    def _quit_app(self) -> None:
-        from PySide6.QtWidgets import QApplication
-        QApplication.instance().quit()
