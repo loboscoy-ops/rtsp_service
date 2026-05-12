@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -29,6 +31,13 @@ class CameraFormData:
     enabled: bool
 
 
+def _field_text(camera: CameraModel | None, attr: str) -> str:
+    if camera is None:
+        return ""
+    raw = getattr(camera, attr, None)
+    return raw if isinstance(raw, str) else ""
+
+
 class CameraDialog(QDialog):
     def __init__(
         self,
@@ -39,20 +48,21 @@ class CameraDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Камера")
         self.resize(460, 280)
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self._objects = objects
 
         self.object_combo = QComboBox()
         for obj in objects:
             self.object_combo.addItem(obj.name, obj.id)
 
-        self.identifier_edit = QLineEdit(camera.camera_identifier if camera else "")
-        self.name_edit = QLineEdit(camera.camera_name if camera else "")
-        self.group_edit = QLineEdit(camera.group_name if camera else "")
-        self.gps_edit = QLineEdit(camera.gps_coords if camera else "")
+        self.identifier_edit = QLineEdit(_field_text(camera, "camera_identifier"))
+        self.name_edit = QLineEdit(_field_text(camera, "camera_name"))
+        self.group_edit = QLineEdit(_field_text(camera, "group_name"))
+        self.gps_edit = QLineEdit(_field_text(camera, "gps_coords"))
         self.gps_edit.setPlaceholderText("например: 55.7522, 37.6156")
-        self.uin_edit = QLineEdit(camera.uin if camera else "")
+        self.uin_edit = QLineEdit(_field_text(camera, "uin"))
         self.uin_edit.setPlaceholderText("УИН объекта (опционально)")
-        self.rtsp_edit = QLineEdit(camera.rtsp_url if camera else "")
+        self.rtsp_edit = QLineEdit(_field_text(camera, "rtsp_url"))
         self.enabled_check = QCheckBox("Камера активна")
         self.enabled_check.setChecked(camera.enabled if camera else True)
 
@@ -81,6 +91,15 @@ class CameraDialog(QDialog):
         root = QVBoxLayout(self)
         root.addLayout(form)
         root.addWidget(buttons)
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        QTimer.singleShot(0, self._after_show_focus)
+
+    def _after_show_focus(self) -> None:
+        self.activateWindow()
+        self.raise_()
+        self.identifier_edit.setFocus(Qt.FocusReason.PopupFocusReason)
 
     def _on_accept(self) -> None:
         if not self.identifier_edit.text().strip():

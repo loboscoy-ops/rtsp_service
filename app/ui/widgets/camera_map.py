@@ -986,6 +986,16 @@ class CameraMapView(QWidget):
             return
         self._page.runJavaScript("window.fitAllMarkers && fitAllMarkers();")
 
+    def prepare_for_modal_dialog(self) -> None:
+        """Снять фокус с встроенного WebEngine перед exec() модального окна.
+
+        На macOS после взаимодействия с картой фокус может остаться у нативного
+        слоя Chromium; тогда поля QLineEdit в дочернем QDialog не получают
+        клики (кажутся «неактивными»), пока фокус не уйдёт с карты.
+        """
+        if self._view is not None:
+            self._view.clearFocus()
+
     def prepare_shutdown(self) -> None:
         """Уменьшить краши Qt WebEngine при закрытии главного окна."""
         for sig in (self.open_camera_requested, self.open_object_requested):

@@ -797,6 +797,9 @@ class MainWindow(QMainWindow):
         if not self.objects_cache:
             QMessageBox.information(self, "Камера", "Сначала добавьте хотя бы один объект")
             return
+        self.map_view.prepare_for_modal_dialog()
+        self.table.setFocus(Qt.FocusReason.OtherFocusReason)
+        QApplication.processEvents()
         dlg = CameraDialog(self.objects_cache, parent=self)
         if not dlg.exec():
             return
@@ -823,6 +826,9 @@ class MainWindow(QMainWindow):
         cam = self.repo.get_camera(camera_id)
         if not cam:
             return
+        self.map_view.prepare_for_modal_dialog()
+        self.table.setFocus(Qt.FocusReason.OtherFocusReason)
+        QApplication.processEvents()
         dlg = CameraDialog(self.objects_cache, parent=self, camera=cam)
         if not dlg.exec():
             return
