@@ -44,6 +44,7 @@ from app.ui.constants import (
     FFPLAY_FOCUS_DELAY_MS,
     BOTTOM_SPLITTER_DEFAULT_SIZES,
     CAMERAS_SPLITTER_DEFAULT_SIZES,
+    IMPORT_TABLE_VISIBLE_ROWS,
     REFRESH_DEBOUNCE_MS,
     RIGHT_PANE_DEFAULT_WIDTH,
     SIDEBAR_DEFAULT_WIDTH,
@@ -96,6 +97,7 @@ class MainWindow(QMainWindow):
         self._active_checks: dict[int, str] = {}
         self._recent_poll_events: deque[str] = deque(maxlen=5)
         self._priority_object_id: int | None = None
+        self._poll_local_mode: bool = False
 
         self.setWindowTitle(f"{config.APP_NAME} v.{config.APP_VERSION}")
         self.resize(*WINDOW_DEFAULT_SIZE)
@@ -318,6 +320,31 @@ class MainWindow(QMainWindow):
         self._bottom_splitter = splitter
         return splitter
 
+    def _resize_cameras_splitter_for_visible_table_rows(self, rows: int) -> None:
+        """Задать высоту верхней части сплиттера под ~`rows` видимых строк таблицы (остальное — скролл)."""
+        if not hasattr(self, "_cameras_splitter"):
+            return
+        sp = self._cameras_splitter
+        table = self.table
+        QApplication.processEvents()
+        header_h = max(table.horizontalHeader().height(), 24)
+        if table.rowCount() >= 1:
+            row_h = max(
+                table.verticalHeader().sectionSize(0),
+                table.verticalHeader().defaultSectionSize(),
+                18,
+            )
+        else:
+            row_h = max(table.verticalHeader().defaultSectionSize(), 24)
+        bottom_min = 160
+        total = sum(sp.sizes())
+        if total <= 0:
+            total = max(sp.height(), 520)
+        want_top = header_h + rows * row_h + 10
+        top_h = min(want_top, total - bottom_min)
+        top_h = max(top_h, header_h + row_h + 6)
+        sp.setSizes([top_h, total - top_h])
+
     def _save_splitter_states(self) -> None:
         settings = QSettings()
         if hasattr(self, "_main_splitter"):
@@ -518,9 +545,16 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "poll_activity"):
             return
         if not self._active_checks:
+            self._poll_local_mode = False
             self.poll_activity.setText("Жду опроса")
             self.poll_activity.setStyleSheet(
                 "QLineEdit { color: #2d9d5f; font-weight: 700; }"
+            )
+            return
+        if self._poll_local_mode:
+            self.poll_activity.setText("Локальный опрос")
+            self.poll_activity.setStyleSheet(
+                "QLineEdit { color: #eab308; font-weight: 600; }"
             )
             return
         self.poll_activity.setText("Проверяю камеры")
@@ -825,8 +859,7 @@ class MainWindow(QMainWindow):
 
     def _bulk_check(self, camera_ids: list[int]) -> None:
         cams = [c for c in (self.repo.get_camera(cid) for cid in camera_ids) if c]
-        self.checker.check_many(cams)
-        self._log(f"Запущена проверка выделенных: {len(cams)} камер")
+        self._start_checks(cams, f"Локальная проверка выделенных ({len(cams)})", local_poll=True)
 
     def _bulk_delete(self, camera_ids: list[int]) -> None:
         if not camera_ids:
@@ -962,13 +995,12 @@ class MainWindow(QMainWindow):
         cam = self.repo.get_camera(camera_id)
         if not cam:
             return
-        self.checker.check_camera(cam)
-        self._log(f"Проверка камеры {self._camera_row_label(cam.id)}: {cam.camera_name}")
+        self._start_checks([cam], "Локальная проверка одной камеры", local_poll=True)
 
     def _manual_check_all(self) -> None:
         cameras = self.repo.list_cameras(object_id=None, search="", status_filter="all")
         enabled = [c for c in cameras if c.enabled]
-        self._start_checks(enabled, "Ручная проверка всех объектов")
+        self._start_checks(enabled, "Ручная проверка всех объектов", local_poll=True)
 
     def _auto_check_offline_objects(self) -> None:
         if self._priority_object_id is not None:
@@ -981,7 +1013,7 @@ class MainWindow(QMainWindow):
             int(c.object_id) for c in all_cameras if (c.status or "").lower() != "online"
         }
         target = [c for c in all_cameras if c.enabled and int(c.object_id) in bad_object_ids]
-        self._start_checks(target, "Автоопрос объектов с offline (каждые 3 мин)")
+        self._start_checks(target, "Автоопрос объектов с offline (каждые 3 мин)", local_poll=False)
 
     def _auto_check_online_objects(self) -> None:
         if self._priority_object_id is not None:
@@ -998,7 +1030,7 @@ class MainWindow(QMainWindow):
             for c in all_cameras
             if c.enabled and int(c.object_id) not in bad_object_ids
         ]
-        self._start_checks(target, "Автоопрос объектов без offline (каждые 10 мин)")
+        self._start_checks(target, "Автоопрос объектов без offline (каждые 10 мин)", local_poll=False)
 
     def _on_priority_object_check_requested(self, object_id: int) -> None:
         cameras = self.repo.list_cameras(object_id=object_id, search="", status_filter="all")
@@ -1009,15 +1041,16 @@ class MainWindow(QMainWindow):
         self.checker.clear_pending()
         QThreadPool.globalInstance().clear()
         self._active_checks.clear()
-        self._start_checks(enabled, f"Приоритетный опрос объекта {object_id}")
+        self._start_checks(enabled, f"Приоритетный опрос объекта {object_id}", local_poll=True)
 
-    def _start_checks(self, cameras: list[CameraModel], reason: str) -> None:
+    def _start_checks(self, cameras: list[CameraModel], reason: str, *, local_poll: bool = False) -> None:
         if not cameras:
             self._log(f"{reason}: камер для опроса нет")
             self._render_poll_activity()
             if self._priority_object_id is not None:
                 self._finish_priority_mode()
             return
+        self._poll_local_mode = local_poll
         for cam in cameras:
             self._active_checks[int(cam.id)] = f"{cam.object_name} / {cam.camera_name}"
         self._render_poll_activity()
@@ -1120,6 +1153,11 @@ class MainWindow(QMainWindow):
         self._refresh_objects()
         self._refresh_cameras()
         self._log(f"Импорт завершен. Создано={created}, обновлено={updated}")
+        if created + updated > 0:
+            QTimer.singleShot(
+                50,
+                lambda: self._resize_cameras_splitter_for_visible_table_rows(IMPORT_TABLE_VISIBLE_ROWS),
+            )
         # По запросу: сразу после загрузки формы запускать опрос камер.
         if created + updated <= 0:
             return
@@ -1132,7 +1170,7 @@ class MainWindow(QMainWindow):
             self._render_poll_activity()
         cameras = self.repo.list_cameras(object_id=None, search="", status_filter="all")
         enabled = [c for c in cameras if c.enabled]
-        self._start_checks(enabled, "Опрос после импорта формы")
+        self._start_checks(enabled, "Опрос после импорта формы", local_poll=True)
 
     # ==================================================================
     # close

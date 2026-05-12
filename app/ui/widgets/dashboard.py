@@ -49,6 +49,15 @@ def _site_strict_majority_offline(cameras: list[CameraModel]) -> bool:
     return offline / total > 0.5
 
 
+def _site_strict_majority_online(cameras: list[CameraModel]) -> bool:
+    """Дашборд при фильтре «online»: только площадки со строго >50% камер online."""
+    total = len(cameras)
+    if total == 0:
+        return False
+    online = sum(1 for c in cameras if c.status == "online")
+    return online / total > 0.5
+
+
 def _ratio_color(online: int, offline: int, unknown: int) -> str:
     total = online + offline + unknown
     if total == 0:
@@ -332,13 +341,19 @@ class DashboardView(QWidget):
         sf = (status_filter or "all").strip().lower()
         by_object = self._cameras_by_object(cameras)
 
-        # При фильтре «offline» на карте и в списке — только площадки,
-        # у которых строго более половины камер offline (полностью online не попадают).
+        # Фильтры статуса (как в тулбаре): активно сужают карту и список площадок.
         if sf == "offline":
             allowed_ids = {
                 int(obj.id)
                 for obj in objects
                 if _site_strict_majority_offline(by_object.get(int(obj.id), []))
+            }
+            map_cameras = [c for c in cameras if int(c.object_id) in allowed_ids]
+        elif sf == "online":
+            allowed_ids = {
+                int(obj.id)
+                for obj in objects
+                if _site_strict_majority_online(by_object.get(int(obj.id), []))
             }
             map_cameras = [c for c in cameras if int(c.object_id) in allowed_ids]
         else:
@@ -388,6 +403,8 @@ class DashboardView(QWidget):
         for obj in objects:
             cams = by_object.get(int(obj.id), [])
             if sf == "offline" and not _site_strict_majority_offline(cams):
+                continue
+            if sf == "online" and not _site_strict_majority_online(cams):
                 continue
             ordered.append((obj, cams))
         ordered.sort(key=lambda pair: self._severity_key(pair[0], pair[1]))
