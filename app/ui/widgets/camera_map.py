@@ -160,6 +160,9 @@ def leaflet_html(markers: list[dict], *, dark: bool = False) -> str:
     open_link = f"{OPEN_SCHEME}://{OPEN_HOST}/"
     object_link = f"{OPEN_SCHEME}://{OBJECT_HOST}/"
 
+    # Leaflet ожидает шаблон URL вида {z}/{x}/{y}. Здесь — обычные строки,
+    # они подставляются в f-string как значения «как есть», поэтому
+    # фигурные скобки нельзя экранировать (никакого {{...}}).
     if dark:
         body_bg = "#12141a"
         container_bg = "#0f1218"
@@ -168,7 +171,7 @@ def leaflet_html(markers: list[dict], *, dark: bool = False) -> str:
         popup_fg = "#e8eaed"
         popup_border = "#2d3544"
         hint_fg = "#8b929e"
-        tile_url = "https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png"
+        tile_url = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
         tile_attr = (
             "&copy; <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a>"
             " &copy; <a href=\"https://carto.com/attributions\">CARTO</a>"
@@ -182,7 +185,7 @@ def leaflet_html(markers: list[dict], *, dark: bool = False) -> str:
         popup_fg = "#1f2330"
         popup_border = "#d6d8dc"
         hint_fg = "#6b7280"
-        tile_url = "https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png"
+        tile_url = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
         tile_attr = "&copy; <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a>"
         tile_subdomains = "abc"
 
