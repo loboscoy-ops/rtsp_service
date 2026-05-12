@@ -1006,6 +1006,7 @@ class MainWindow(QMainWindow):
         self._priority_object_id = object_id
         self._offline_timer.stop()
         self._online_timer.stop()
+        self.checker.clear_pending()
         QThreadPool.globalInstance().clear()
         self._active_checks.clear()
         self._start_checks(enabled, f"Приоритетный опрос объекта {object_id}")
@@ -1125,6 +1126,7 @@ class MainWindow(QMainWindow):
         if self._active_checks:
             # Останавливаем текущую очередь, чтобы приоритетно проверить
             # актуально загруженные данные.
+            self.checker.clear_pending()
             QThreadPool.globalInstance().clear()
             self._active_checks.clear()
             self._render_poll_activity()
@@ -1148,6 +1150,7 @@ class MainWindow(QMainWindow):
 
         pool = QThreadPool.globalInstance()
         # Не ждать десятки зависших ffprobe: снимаем очередь иронов и рвём блокирующие probes.
+        self.checker.clear_pending()
         pool.clear()
 
         if hasattr(self, "map_view"):
@@ -1163,6 +1166,7 @@ class MainWindow(QMainWindow):
                 "При закрытии QThreadPool не освободился за %s мс — принудительно очищаем",
                 THREADPOOL_SHUTDOWN_WAIT_MS,
             )
+            self.checker.clear_pending()
             pool.clear()
 
         try:

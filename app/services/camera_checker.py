@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from collections import Counter, deque
 from dataclasses import dataclass
 from typing import Optional
 
@@ -93,13 +94,40 @@ class CameraCheckWorker(QRunnable):
         checked_at: str,
         last_seen: Optional[str],
     ) -> None:
-        timeout_sec = max(1, config.CHECK_TIMEOUT_SEC)
+        fast_timeout_sec = max(
+            1,
+            int(getattr(config, "CHECK_FAST_TIMEOUT_SEC", config.CHECK_TIMEOUT_SEC)),
+        )
+        deep_timeout_sec = max(
+            1,
+            int(getattr(config, "CHECK_DEEP_TIMEOUT_SEC", config.CHECK_TIMEOUT_SEC)),
+        )
+
+        # Этап 1: быстрый проход по TCP для всех камер.
+        fast_outcome = self._probe_once(url, "tcp", fast_timeout_sec)
+        if fast_outcome.kind == "online":
+            self._emit(
+                CheckResult(
+                    camera_id=self.camera.id,
+                    status="online",
+                    checked_at=checked_at,
+                    error=None,
+                    seen_online_at=checked_at,
+                )
+            )
+            return
+        if fast_outcome.kind == "error":
+            self._emit(self._offline_result(checked_at, last_seen, error=fast_outcome.error[:500]))
+            return
+        if fast_outcome.kind == "exception":
+            self._emit(self._offline_result(checked_at, last_seen, error=fast_outcome.error))
+            return
 
         # Часть камер (особенно Dahua/Hikvision со стримом cam/realmonitor) отвечает
         # на TCP медленно или только по UDP. ffplay сам пробует оба транспорта,
-        # ffprobe — нет, поэтому делаем это сами: сначала TCP, потом UDP.
+        # ffprobe — нет, поэтому в углубленном этапе пробуем TCP, затем UDP.
         for transport in ("tcp", "udp"):
-            outcome = self._probe_once(url, transport, timeout_sec)
+            outcome = self._probe_once(url, transport, deep_timeout_sec)
             if outcome.kind == "online":
                 self._emit(
                     CheckResult(
@@ -261,11 +289,80 @@ class CameraChecker(QObject):
         super().__init__()
         self.pool = QThreadPool.globalInstance()
         self.pool.setMaxThreadCount(max(1, config.MAX_CONCURRENT_CHECKS))
+        self._pending: deque[CameraModel] = deque()
+        self._active_by_object: Counter[int] = Counter()
+        self._active_by_host: Counter[str] = Counter()
+        self._active_ids: set[int] = set()
+        self._inflight_meta: dict[int, tuple[int, str]] = {}
+        self._max_per_object = max(1, config.MAX_CONCURRENT_CHECKS_PER_OBJECT)
+        self._max_per_host = max(1, config.MAX_CONCURRENT_CHECKS_PER_HOST)
+        self.camera_checked.connect(self._on_camera_finished)
 
     def check_camera(self, camera: CameraModel) -> None:
-        worker = CameraCheckWorker(camera, self.camera_checked, self.camera_check_started)
-        self.pool.start(worker)
+        self._pending.append(camera)
+        self._dispatch_pending()
 
     def check_many(self, cameras: list[CameraModel]) -> None:
         for cam in cameras:
-            self.check_camera(cam)
+            self._pending.append(cam)
+        self._dispatch_pending()
+
+    def clear_pending(self) -> None:
+        self._pending.clear()
+
+    def _host_key(self, camera: CameraModel) -> str:
+        return (host_from_rtsp_url(camera.rtsp_url) or "").strip().lower()
+
+    def _can_start(self, camera: CameraModel) -> bool:
+        object_id = int(camera.object_id)
+        if self._active_by_object[object_id] >= self._max_per_object:
+            return False
+        host = self._host_key(camera)
+        if host and self._active_by_host[host] >= self._max_per_host:
+            return False
+        return True
+
+    def _mark_started(self, camera: CameraModel) -> None:
+        cam_id = int(camera.id)
+        object_id = int(camera.object_id)
+        host = self._host_key(camera)
+        self._active_ids.add(cam_id)
+        self._active_by_object[object_id] += 1
+        if host:
+            self._active_by_host[host] += 1
+        self._inflight_meta[cam_id] = (object_id, host)
+
+    def _dispatch_pending(self) -> None:
+        if not self._pending:
+            return
+        retries_left = len(self._pending)
+        while self._pending and self.pool.activeThreadCount() < self.pool.maxThreadCount():
+            camera = self._pending.popleft()
+            cam_id = int(camera.id)
+            if cam_id in self._active_ids:
+                retries_left -= 1
+                if retries_left <= 0:
+                    break
+                continue
+            if not self._can_start(camera):
+                self._pending.append(camera)
+                retries_left -= 1
+                if retries_left <= 0:
+                    break
+                continue
+            self._mark_started(camera)
+            worker = CameraCheckWorker(camera, self.camera_checked, self.camera_check_started)
+            self.pool.start(worker)
+            retries_left = len(self._pending)
+
+    def _on_camera_finished(self, result: CheckResult) -> None:
+        cam_id = int(result.camera_id)
+        meta = self._inflight_meta.pop(cam_id, None)
+        if meta is not None:
+            object_id, host = meta
+            if self._active_by_object[object_id] > 0:
+                self._active_by_object[object_id] -= 1
+            if host and self._active_by_host[host] > 0:
+                self._active_by_host[host] -= 1
+        self._active_ids.discard(cam_id)
+        self._dispatch_pending()

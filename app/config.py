@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 APP_NAME = "Urus Camera Monitor"
-APP_VERSION = "0.1.69"
+APP_VERSION = "0.1.70"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 IS_FROZEN = bool(getattr(sys, "frozen", False))
@@ -63,7 +63,11 @@ EXCEL_TEMPLATE_HEADERS = [
 
 CHECK_INTERVAL_OFFLINE_SEC = int(os.getenv("RTSP_CHECK_INTERVAL_OFFLINE_SEC", "180"))
 CHECK_INTERVAL_ONLINE_SEC = int(os.getenv("RTSP_CHECK_INTERVAL_ONLINE_SEC", "600"))
+# Legacy общий timeout (оставлен для обратной совместимости и как fallback).
 CHECK_TIMEOUT_SEC = int(os.getenv("RTSP_CHECK_TIMEOUT_SEC", "30"))
+# Двухэтапный опрос: быстрый проход по всем + углубленный только для проблемных.
+CHECK_FAST_TIMEOUT_SEC = int(os.getenv("RTSP_CHECK_FAST_TIMEOUT_SEC", "4"))
+CHECK_DEEP_TIMEOUT_SEC = int(os.getenv("RTSP_CHECK_DEEP_TIMEOUT_SEC", "12"))
 CHECK_TIMEOUT_FAIL_MESSAGE = os.getenv(
     "RTSP_CHECK_TIMEOUT_FAIL_MESSAGE",
     "RTSP не подключается > 30 сек",
@@ -73,6 +77,13 @@ OFFLINE_ERROR_CODE = os.getenv("RTSP_OFFLINE_ERROR_CODE", "0x00")
 # 24 потока на ~5000 камер — около ~3,5 минут на полный цикл при NORMAL=5с.
 # Можно поднять переменной окружения RTSP_MAX_CONCURRENT_CHECKS.
 MAX_CONCURRENT_CHECKS = int(os.getenv("RTSP_MAX_CONCURRENT_CHECKS", "24"))
+# Дополнительные лимиты, чтобы не перегружать один объект/регистратор.
+MAX_CONCURRENT_CHECKS_PER_OBJECT = int(
+    os.getenv("RTSP_MAX_CONCURRENT_CHECKS_PER_OBJECT", "2")
+)
+MAX_CONCURRENT_CHECKS_PER_HOST = int(
+    os.getenv("RTSP_MAX_CONCURRENT_CHECKS_PER_HOST", "1")
+)
 
 # Параллельная ICMP-проверка хоста камеры (отделяет «сеть упала» от «RTSP сломан»).
 PING_ENABLED = os.getenv("RTSP_PING_ENABLED", "1") == "1"
