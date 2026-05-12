@@ -234,7 +234,10 @@ class DashboardView(QWidget):
         map_wrap.setStyleSheet(f"QFrame {{ background-color: {THEME_BG_WINDOW}; }}")
         map_layout = QVBoxLayout(map_wrap)
         map_layout.setContentsMargins(0, 0, 0, 0)
-        self.map_view = CameraMapView(self, dark=False)
+        # cluster=True — на мини-карте дашборда камеры одного района
+        # собираются в стопки с количеством (Leaflet.markercluster). На
+        # основной карте «Камеры» кластеризация по-прежнему выключена.
+        self.map_view = CameraMapView(self, dark=False, cluster=True)
         map_layout.addWidget(self.map_view)
         root.addWidget(map_wrap, 2)
 

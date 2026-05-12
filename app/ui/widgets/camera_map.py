@@ -453,9 +453,20 @@ class CameraMapView(QWidget):
     open_camera_requested = Signal(int)
     open_object_requested = Signal(int)
 
-    def __init__(self, parent: Optional[QWidget] = None, *, dark: bool = False):
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        *,
+        dark: bool = False,
+        cluster: bool = False,
+    ):
         super().__init__(parent)
         self._dark = dark
+        # Кластеризация маркеров (Leaflet.markercluster). По умолчанию
+        # выключена — на карте «Камеры» точки всегда индивидуальные.
+        # Включаем только для дашбордной мини-карты, чтобы при общем виде
+        # на регион камеры собирались в стопки с количеством.
+        self._cluster = cluster
         self._stack = QStackedWidget(self)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -568,11 +579,16 @@ class CameraMapView(QWidget):
 
         self._loaded = False
         self._pending_status_updates.clear()
-        # Никаких «стопок»: используем обычный L.featureGroup.
-        # Маркеры, попадающие в одну и ту же точку GPS, рисуются друг на
-        # друге — это нормальный визуальный «слой», без агрегации в кружок.
+        # Кластер — только если CameraMapView создан с cluster=True
+        # (сейчас это только дашбордная мини-карта). Радиус — стандартный
+        # Leaflet (80 px), чтобы стопки образовывались уже на уровне города.
         self._view.setHtml(
-            leaflet_html(markers, dark=self._dark, cluster=False),
+            leaflet_html(
+                markers,
+                dark=self._dark,
+                cluster=self._cluster,
+                cluster_radius=80,
+            ),
             QUrl("https://local.map/"),
         )
         self._stack.setCurrentWidget(self._view)
