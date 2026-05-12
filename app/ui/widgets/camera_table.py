@@ -24,16 +24,22 @@ from app.utils.datetime_utils import iso_to_human
 from app.utils.validators import mask_rtsp_url
 
 
-def _is_required_h264_error_text(text: Optional[str]) -> bool:
-    """Сообщение про обязательный H.264 (с учётом префикса OFFLINE_ERROR_CODE)."""
-    t = (text or "").strip()
-    msg = config.REQUIRED_H264_ERROR_TEXT
-    if t == msg:
-        return True
+def _display_camera_error_text(raw: Optional[str]) -> str:
+    """Текст ошибки для UI: без префикса OFFLINE_ERROR_CODE и без устаревшего «0x00 » из БД."""
+    t = (raw or "").strip()
+    if not t:
+        return ""
     code = (config.OFFLINE_ERROR_CODE or "").strip()
     if code and t.startswith(code):
-        return t[len(code) :].strip() == msg
-    return False
+        t = t[len(code) :].lstrip()
+    if len(t) >= 4 and t[:4].lower() == "0x00" and (len(t) == 4 or t[4] in " \t:"):
+        t = t[4:].lstrip(" \t:")
+    return t
+
+
+def _is_required_h264_error_text(text: Optional[str]) -> bool:
+    """Сообщение про обязательный H.264 (после снятия префиксов для отображения)."""
+    return _display_camera_error_text(text) == config.REQUIRED_H264_ERROR_TEXT
 
 
 # Поля для массового редактирования: (label, key)
@@ -266,8 +272,9 @@ class CameraTable(QTableWidget):
         self.setItem(row, self.COL_CHECKED, checked_item)
 
         err_raw = cam.last_error or ""
-        err_item = QTableWidgetItem(err_raw)
-        self._set_hover_tooltip(err_item, cam.last_error)
+        err_disp = _display_camera_error_text(err_raw)
+        err_item = QTableWidgetItem(err_disp)
+        self._set_hover_tooltip(err_item, err_disp or None)
         if _is_required_h264_error_text(err_raw):
             err_item.setForeground(QBrush(QColor(PING_BLOCKED_COLOR)))
         self.setItem(row, self.COL_ERR, err_item)
