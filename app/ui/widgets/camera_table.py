@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Callable, Iterable, Optional
 
 from PySide6.QtCore import QPoint, Qt, QSettings, Signal
@@ -24,16 +25,19 @@ from app.utils.datetime_utils import iso_to_human
 from app.utils.validators import mask_rtsp_url
 
 
+_LEGACY_HEX_CODE_PREFIX = re.compile(r"^\s*0x[0-9a-fA-F]{1,4}\b\s*", re.IGNORECASE)
+
+
 def _display_camera_error_text(raw: Optional[str]) -> str:
-    """Текст ошибки для UI: без префикса OFFLINE_ERROR_CODE и без устаревшего «0x00 » из БД."""
+    """Текст ошибки в таблице: убрать устаревшие префиксы вида 0x00 / 0x01 из БД."""
     t = (raw or "").strip()
     if not t:
         return ""
-    code = (config.OFFLINE_ERROR_CODE or "").strip()
-    if code and t.startswith(code):
-        t = t[len(code) :].lstrip()
-    if len(t) >= 4 and t[:4].lower() == "0x00" and (len(t) == 4 or t[4] in " \t:"):
-        t = t[4:].lstrip(" \t:")
+    while True:
+        m = _LEGACY_HEX_CODE_PREFIX.match(t)
+        if not m:
+            break
+        t = t[m.end() :].lstrip()
     return t
 
 

@@ -15,6 +15,20 @@ from app.utils.process_utils import ensure_binary_exists, run_command
 from app.utils.validators import is_valid_rtsp_url
 
 
+def _offline_user_facing_error(detail: Optional[str]) -> str:
+    """Текст для колонки «Ошибка» при offline: без технических кодов; сеть → «Нет сети»."""
+    d = (detail or "").strip()
+    if not d:
+        return config.CONNECTION_FAIL_MESSAGE
+    if d == config.REQUIRED_H264_ERROR_TEXT:
+        return d
+    if d in ("Камера выключена", "Некорректный RTSP URL"):
+        return d
+    if d.startswith("ffprobe не найден"):
+        return d
+    return config.CONNECTION_FAIL_MESSAGE
+
+
 # --- результаты ------------------------------------------------------------
 
 
@@ -225,7 +239,7 @@ class CameraCheckWorker(QRunnable):
             camera_id=self.camera.id,
             status="offline",
             checked_at=checked_at,
-            error=error,
+            error=_offline_user_facing_error(error),
             seen_online_at=last_seen,
         )
 
@@ -243,25 +257,12 @@ class CameraCheckWorker(QRunnable):
             pass
 
     def _emit(self, result: CheckResult) -> None:
-        self._stamp_offline_code(result)
         self._stamp_ping(result)
         try:
             self._result_signal.emit(result)
         except RuntimeError:
             # Владелец сигнала уже уничтожен (приложение закрывается) — молча игнорируем.
             pass
-
-    @staticmethod
-    def _stamp_offline_code(result: CheckResult) -> None:
-        if result.status != "offline":
-            return
-        code = config.OFFLINE_ERROR_CODE
-        if not code:
-            return
-        text = (result.error or "").strip()
-        if text.startswith(code):
-            return
-        result.error = f"{code} {text}".strip()
 
     def _stamp_ping(self, result: CheckResult) -> None:
         if self._ping_result is None:

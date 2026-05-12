@@ -134,7 +134,7 @@ def main() -> int:
     win = MainWindow(repo)
     win.timer.stop()
     win.error_text.setPlainText(
-        "Демо: «КПП вход» — offline (0x00)\n"
+        "Демо: «КПП вход» — offline (Нет сети)\n"
         "Демо: проверка RTSP — таймаут\n"
         "(текст панели ошибок для скриншота)"
     )

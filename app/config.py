@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 APP_NAME = "Urus Camera Monitor"
-APP_VERSION = "0.1.75"
+APP_VERSION = "0.1.76"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 IS_FROZEN = bool(getattr(sys, "frozen", False))
@@ -68,10 +68,13 @@ CHECK_TIMEOUT_SEC = int(os.getenv("RTSP_CHECK_TIMEOUT_SEC", "30"))
 # Двухэтапный опрос: быстрый проход по всем + углубленный только для проблемных.
 CHECK_FAST_TIMEOUT_SEC = int(os.getenv("RTSP_CHECK_FAST_TIMEOUT_SEC", "4"))
 CHECK_DEEP_TIMEOUT_SEC = int(os.getenv("RTSP_CHECK_DEEP_TIMEOUT_SEC", "12"))
-CHECK_TIMEOUT_FAIL_MESSAGE = os.getenv(
-    "RTSP_CHECK_TIMEOUT_FAIL_MESSAGE",
-    "RTSP не подключается > 30 сек",
+# Сообщение, если к камере / RTSP не удалось подключиться (таймаут, сеть, отказ и т.п.).
+CONNECTION_FAIL_MESSAGE = os.getenv(
+    "RTSP_CONNECTION_FAIL_MESSAGE",
+    os.getenv("RTSP_CHECK_TIMEOUT_FAIL_MESSAGE", "Нет сети"),
 )
+# Совместимость: старый env RTSP_CHECK_TIMEOUT_FAIL_MESSAGE учитывается в CONNECTION_FAIL_MESSAGE.
+CHECK_TIMEOUT_FAIL_MESSAGE = CONNECTION_FAIL_MESSAGE
 # Допустимые кодеки первого видеопотока (ffprobe stream=codec_name), через запятую.
 _raw_codecs = os.getenv("RTSP_REQUIRED_VIDEO_CODECS", "h264").strip()
 REQUIRED_VIDEO_CODECS = frozenset(
@@ -81,8 +84,6 @@ REQUIRED_VIDEO_CODECS = frozenset(
 ) or frozenset({"h264"})
 # Текст в колонке «Ошибка» при отсутствии H.264 или неопределённом видеокодеке (без детализации кодека).
 REQUIRED_H264_ERROR_TEXT = os.getenv("RTSP_REQUIRED_H264_ERROR_TEXT", "Требуется H.264")
-# Префикс-код в колонке «Ошибка» (пусто = не добавлять). Раньше по умолчанию был «0x00».
-OFFLINE_ERROR_CODE = os.getenv("RTSP_OFFLINE_ERROR_CODE", "").strip()
 # 24 потока на ~5000 камер — около ~3,5 минут на полный цикл при NORMAL=5с.
 # Можно поднять переменной окружения RTSP_MAX_CONCURRENT_CHECKS.
 MAX_CONCURRENT_CHECKS = int(os.getenv("RTSP_MAX_CONCURRENT_CHECKS", "24"))
