@@ -212,6 +212,21 @@ QPushButton:hover {{
 QPushButton:pressed {{
   background-color: #323a4a;
 }}
+QPushButton#ErrorsClearBtn {{
+  background-color: rgba(248, 81, 73, 0.18);
+  color: #ffd3d3;
+  border: 1px solid rgba(248, 81, 73, 0.55);
+  padding: 4px 10px;
+  min-height: 18px;
+  font-weight: 600;
+}}
+QPushButton#ErrorsClearBtn:hover {{
+  background-color: rgba(248, 81, 73, 0.32);
+  border-color: #f85149;
+}}
+QPushButton#ErrorsClearBtn:pressed {{
+  background-color: rgba(248, 81, 73, 0.45);
+}}
 QPushButton:disabled {{
   color: {THEME_FG_MUTED};
   background-color: {THEME_BG_PANEL};
@@ -290,6 +305,10 @@ BOTTOM_SPLITTER_DEFAULT_SIZES = (820, 380)
 
 LOGO_HEIGHT_PX = 84
 STATUSBAR_PADDING_PX = 8
+# Высота лого, прижатого в правый угол тулбара. Должна совпадать с
+# фактической высотой кнопок тулбара (≈ 28 px), иначе логотип будет либо
+# выступать за тулбар, либо «висеть» сильно меньше его.
+TOOLBAR_LOGO_HEIGHT_PX = 28
 
 # --- интервалы --------------------------------------------------------------
 

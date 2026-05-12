@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -20,9 +21,9 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
-    QStatusBar,
     QTextEdit,
     QToolBar,
     QVBoxLayout,
@@ -38,19 +39,19 @@ from app.services.import_service import ImportService
 from app.services.template_service import TemplateService
 from app.ui.constants import (
     CHECK_TIMER_MIN_INTERVAL_SEC,
-    ERROR_PANE_QSS,
+    ERROR_PANE_BG,
+    ERROR_PANE_FG,
     FFPLAY_FOCUS_DELAY_MS,
     BOTTOM_SPLITTER_DEFAULT_SIZES,
     CAMERAS_SPLITTER_DEFAULT_SIZES,
-    LOGO_HEIGHT_PX,
     REFRESH_DEBOUNCE_MS,
     RIGHT_PANE_DEFAULT_WIDTH,
     SIDEBAR_DEFAULT_WIDTH,
     SIDEBAR_MIN_WIDTH,
-    STATUS_BAR_MESSAGE_MS,
-    STATUSBAR_PADDING_PX,
     THEME_BG_PANEL,
+    THEME_BORDER,
     THREADPOOL_SHUTDOWN_WAIT_MS,
+    TOOLBAR_LOGO_HEIGHT_PX,
     WINDOW_DEFAULT_SIZE,
 )
 from app.ui.dialogs.camera_dialog import CameraDialog
@@ -118,8 +119,8 @@ class MainWindow(QMainWindow):
     def _setup_ui(self) -> None:
         self._build_toolbar()
         self.setCentralWidget(self._build_central_stack())
-        self.setStatusBar(QStatusBar())
-        self._setup_logo()
+        # Status bar убран целиком — лог пишется только в системный логгер,
+        # лого живёт в правом углу тулбара (см. _build_toolbar).
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("Main")
@@ -166,6 +167,13 @@ class MainWindow(QMainWindow):
         self.status_filter.currentIndexChanged.connect(self._refresh_cameras)
         toolbar.addWidget(QLabel("Статус:"))
         toolbar.addWidget(self.status_filter)
+
+        # Растяжка прижимает лого «Урус» в правый угол тулбара.
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        spacer.setStyleSheet("background: transparent;")
+        toolbar.addWidget(spacer)
+        self._setup_logo(toolbar)
 
     @staticmethod
     def _add_toolbar_button(
@@ -238,9 +246,10 @@ class MainWindow(QMainWindow):
         return splitter
 
     def _build_objects_pane(self) -> QWidget:
+        # Заголовок «Объекты» убран по просьбе — список говорит сам за себя.
         wrapper = QWidget()
         layout = QVBoxLayout(wrapper)
-        layout.addWidget(QLabel("Объекты"))
+        layout.setContentsMargins(0, 0, 0, 0)
         self.sidebar = ObjectSidebar()
         self.sidebar.setMinimumWidth(SIDEBAR_MIN_WIDTH)
         layout.addWidget(self.sidebar)
@@ -262,12 +271,13 @@ class MainWindow(QMainWindow):
         wrapper = QWidget()
         layout = QVBoxLayout(wrapper)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(QLabel("Камеры"))
         self.table = CameraTable()
         layout.addWidget(self.table)
         return wrapper
 
     def _build_bottom_pane(self) -> QSplitter:
+        # Карта и панель «Ошибки» делят нижнюю строку поровну (высоты
+        # выровнены, ширины задаются BOTTOM_SPLITTER_DEFAULT_SIZES).
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._build_map_panel())
         splitter.addWidget(self._build_errors_panel())
@@ -282,22 +292,33 @@ class MainWindow(QMainWindow):
         wrapper = QWidget()
         layout = QVBoxLayout(wrapper)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(QLabel("Карта"))
         self.map_view = CameraMapView(self)
         self.map_view.open_camera_requested.connect(self._open_camera_stream)
         layout.addWidget(self.map_view)
         return wrapper
 
     def _build_errors_panel(self) -> QWidget:
-        wrapper = QWidget()
+        # Кнопка «Очистить» теперь живёт ВНУТРИ единого блока ошибок:
+        # снаружи — общая рамка как у QTextEdit, внутри слева → справа
+        # узкая шапка с кнопкой, ниже — сам текст ошибок.
+        wrapper = QFrame()
+        wrapper.setObjectName("ErrorsPanel")
+        wrapper.setStyleSheet(
+            "QFrame#ErrorsPanel {"
+            f" background-color: {ERROR_PANE_BG};"
+            f" border: 1px solid {THEME_BORDER};"
+            " border-radius: 6px;"
+            "}"
+        )
         layout = QVBoxLayout(wrapper)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(6, 4, 6, 6)
+        layout.setSpacing(4)
 
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
-        header.addWidget(QLabel("Ошибки"))
         header.addStretch(1)
         self.errors_clear_btn = QPushButton("Очистить")
+        self.errors_clear_btn.setObjectName("ErrorsClearBtn")
         self.errors_clear_btn.setToolTip(
             "Скрыть все текущие записи в панели «Ошибки». "
             "При следующей проверке камер актуальные ошибки появятся снова."
@@ -308,8 +329,16 @@ class MainWindow(QMainWindow):
 
         self.error_text = QTextEdit()
         self.error_text.setReadOnly(True)
-        self.error_text.setStyleSheet(ERROR_PANE_QSS)
-        layout.addWidget(self.error_text)
+        # У текстового поля убираем собственную рамку — рамка уже у обёртки.
+        self.error_text.setStyleSheet(
+            "QTextEdit {"
+            f" background-color: {ERROR_PANE_BG};"
+            f" color: {ERROR_PANE_FG};"
+            " border: none;"
+            " padding: 0px;"
+            "}"
+        )
+        layout.addWidget(self.error_text, 1)
         return wrapper
 
     def _clear_errors_pane(self) -> None:
@@ -325,25 +354,31 @@ class MainWindow(QMainWindow):
         if had_anything:
             self._log("Панель «Ошибки» очищена")
 
-    def _setup_logo(self) -> None:
+    def _setup_logo(self, toolbar: QToolBar) -> None:
+        """Положить логотип «Урус» в правый угол тулбара.
+
+        Высота тулбара ограничена кнопками, поэтому логотип масштабируем
+        под высоту тулбара (TOOLBAR_LOGO_HEIGHT_PX), не под старую панель
+        статуса. Если файла лого нет — просто ничего не добавляем.
+        """
         if not config.LOGO_PATH.exists():
             return
         pix = QPixmap(str(config.LOGO_PATH))
         if pix.isNull():
             return
-        pix = pix.scaledToHeight(LOGO_HEIGHT_PX, Qt.TransformationMode.SmoothTransformation)
+        pix = pix.scaledToHeight(
+            TOOLBAR_LOGO_HEIGHT_PX, Qt.TransformationMode.SmoothTransformation
+        )
         pix = self._composite_on_theme(pix)
         self.logo_label = QLabel()
         self.logo_label.setPixmap(pix)
         self.logo_label.setToolTip("УРУС")
-        self.logo_label.setContentsMargins(8, 0, 8, 0)
-        self.logo_label.setFixedHeight(LOGO_HEIGHT_PX)
+        self.logo_label.setContentsMargins(12, 0, 4, 0)
+        self.logo_label.setFixedHeight(TOOLBAR_LOGO_HEIGHT_PX)
         self.logo_label.setStyleSheet(
             f"background-color: {THEME_BG_PANEL}; border: none;"
         )
-        self.statusBar().setSizeGripEnabled(False)
-        self.statusBar().setFixedHeight(LOGO_HEIGHT_PX + STATUSBAR_PADDING_PX)
-        self.statusBar().addPermanentWidget(self.logo_label)
+        toolbar.addWidget(self.logo_label)
 
     @staticmethod
     def _composite_on_theme(src: QPixmap) -> QPixmap:
@@ -394,11 +429,10 @@ class MainWindow(QMainWindow):
     # ==================================================================
 
     def _log(self, message: str) -> None:
-        # Окно «Лог» убрано — пишем в системный лог и в строку статуса.
+        # Status bar убран — пишем сообщения только в системный логгер.
+        # При необходимости их можно увидеть через Console.app (macOS) или
+        # ~/Library/Logs/...
         _log.info("%s", message)
-        if self._closing:
-            return
-        self.statusBar().showMessage(message, STATUS_BAR_MESSAGE_MS)
 
     def _log_error(self, message: str) -> None:
         """Разовая ошибка не от проверки камер (FFPLAY/IMPORT…)."""

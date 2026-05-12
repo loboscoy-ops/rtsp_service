@@ -568,18 +568,11 @@ class CameraMapView(QWidget):
 
         self._loaded = False
         self._pending_status_updates.clear()
-        # «Стопки» только когда маркеры реально перекрываются: радиус
-        # кластера = ~половина диаметра камерного маркера (26 px). Маркеры,
-        # стоящие даже впритык краями (≈26 px от центра до центра), уже
-        # будут двумя отдельными точками, как ожидает пользователь.
-        cluster_radius = 14
+        # Никаких «стопок»: используем обычный L.featureGroup.
+        # Маркеры, попадающие в одну и ту же точку GPS, рисуются друг на
+        # друге — это нормальный визуальный «слой», без агрегации в кружок.
         self._view.setHtml(
-            leaflet_html(
-                markers,
-                dark=self._dark,
-                cluster=True,
-                cluster_radius=cluster_radius,
-            ),
+            leaflet_html(markers, dark=self._dark, cluster=False),
             QUrl("https://local.map/"),
         )
         self._stack.setCurrentWidget(self._view)
