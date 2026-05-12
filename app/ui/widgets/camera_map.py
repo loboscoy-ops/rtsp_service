@@ -62,9 +62,9 @@ def markers_payload(cameras: list["CameraModel"]) -> list[dict]:
 def fallback_html(markers: list[dict], skipped: int) -> str:
     """HTML-фолбэк, когда Qt WebEngine недоступен."""
     lines = [
-        "<div style='background:#12141a;color:#e8eaed;padding:16px;font-family:system-ui,sans-serif;'>",
-        "<h3 style='color:#e8eaed;margin-top:0;'>Карта недоступна (нет Qt WebEngine)</h3>",
-        "<p style='color:#8b929e;'>Установите полный PySide6 с WebEngine или откройте координаты по ссылкам:</p>",
+        "<div style='background:#ffffff;color:#1f2330;padding:16px;font-family:system-ui,sans-serif;'>",
+        "<h3 style='margin-top:0;'>Карта недоступна (нет Qt WebEngine)</h3>",
+        "<p style='color:#6b7280;'>Установите полный PySide6 с WebEngine или откройте координаты по ссылкам:</p>",
         "<ul style='line-height:1.6;'>",
     ]
     for m in markers:
@@ -77,7 +77,7 @@ def fallback_html(markers: list[dict], skipped: int) -> str:
         )
     lines.append("</ul>")
     if skipped:
-        lines.append(f"<p style='color:#8b929e;'>Камер без координат: {skipped}</p>")
+        lines.append(f"<p style='color:#6b7280;'>Камер без координат: {skipped}</p>")
     lines.append("</div>")
     return "\n".join(lines)
 
@@ -100,40 +100,40 @@ def leaflet_html(markers: list[dict]) -> str:
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
-html, body, #map {{ height: 100%; margin: 0; padding: 0; background: #12141a; }}
-.leaflet-container {{ background: #12141a; }}
+html, body, #map {{ height: 100%; margin: 0; padding: 0; background: #ffffff; }}
+.leaflet-container {{ background: #f5f5f5; }}
 .cam-num {{
   width: 26px; height: 26px; border-radius: 50%;
-  border: 2px solid #1a1e28; color: #fff; font: bold 12px/22px system-ui, sans-serif;
+  border: 2px solid #ffffff; color: #ffffff; font: bold 12px/22px system-ui, sans-serif;
   text-align: center; line-height: 22px;
-  box-shadow: 0 2px 8px rgba(0,0,0,.55);
+  box-shadow: 0 1px 4px rgba(0,0,0,.45);
   cursor: pointer;
 }}
 .cam-online {{ background: #2d9d5f; }}
 .cam-offline {{ background: #c43c3c; }}
 .cam-unknown {{ background: #6b7280; }}
 .cam-popup .leaflet-popup-content-wrapper {{
-  background: #1a1e28;
-  color: #e8eaed;
+  background: #ffffff;
+  color: #1f2330;
   border-radius: 8px;
-  border: 1px solid #2d3544;
+  border: 1px solid #d6d8dc;
 }}
-.cam-popup .leaflet-popup-tip {{ background: #1a1e28; }}
+.cam-popup .leaflet-popup-tip {{ background: #ffffff; }}
 .cam-popup .open-link {{
   display: inline-block;
   margin-top: 6px;
   padding: 6px 12px;
-  background: #3d8bfd;
-  color: #fff;
+  background: #1f9d55;
+  color: #ffffff;
   border-radius: 6px;
   text-decoration: none;
   font-weight: 600;
 }}
-.cam-popup .open-link:hover {{ background: #5a9dff; }}
+.cam-popup .open-link:hover {{ background: #2bb573; }}
 .cam-popup .hint {{
   display: block;
   margin-top: 4px;
-  color: #8b929e;
+  color: #6b7280;
   font-size: 11px;
 }}
 </style>
@@ -157,10 +157,9 @@ map.attributionControl.setPrefix(
   '<span aria-hidden="true">\\uD83C\\uDDF7\\uD83C\\uDDFA</span> '
   + '<a href="https://leafletjs.com" target="_blank">Leaflet</a>'
 );
-L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
-  maxZoom: 20,
-  subdomains: 'abcd',
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+  maxZoom: 19,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
 }}).addTo(map);
 
 const markerById = {{}};
