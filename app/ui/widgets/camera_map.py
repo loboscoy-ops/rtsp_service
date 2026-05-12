@@ -147,12 +147,22 @@ def fallback_html(markers: list[dict], skipped: int) -> str:
     return "\n".join(lines)
 
 
-def leaflet_html(markers: list[dict], *, dark: bool = False) -> str:
+def leaflet_html(
+    markers: list[dict],
+    *,
+    dark: bool = False,
+    cluster: bool = False,
+) -> str:
     """HTML страницы с интерактивной картой Leaflet.
 
     Скрипт регистрирует две глобальные функции:
       - ``updateCameraStatus(id, status)`` — поменять цвет маркера без перерисовки;
       - ``fitAllMarkers()`` — снова уместить все маркеры в видимую область.
+
+    При ``cluster=True`` маркеры группируются через Leaflet.markercluster —
+    это держит карту отзывчивой при тысячах точек (раздел «Камеры», 5к камер).
+    Для дашборда (один маркер на площадку) кластеризация не нужна, чтобы
+    были видны индивидуальные счётчики камер.
     """
     # Вставляем как JS-литерал; \u003c — чтобы случайный "</" в данных не закрыл <script>.
     markers_json = json.dumps(markers, ensure_ascii=False)
@@ -189,11 +199,24 @@ def leaflet_html(markers: list[dict], *, dark: bool = False) -> str:
         tile_attr = "&copy; <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a>"
         tile_subdomains = "abc"
 
+    cluster_css = (
+        '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>\n'
+        '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>'
+        if cluster else ""
+    )
+    cluster_js = (
+        '<script src="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>'
+        if cluster else ""
+    )
+    cluster_flag = "true" if cluster else "false"
+
     return f"""<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8"/>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"/>
+{cluster_css}
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+{cluster_js}
 <style>
 html, body, #map {{ height: 100%; margin: 0; padding: 0; background: {body_bg}; }}
 .leaflet-container {{ background: {container_bg}; }}
@@ -253,8 +276,7 @@ function statusClass(s) {{
 const markers = {markers_json};
 const map = L.map('map', {{ zoomControl: true }});
 map.attributionControl.setPrefix(
-  '<span aria-hidden="true">\\uD83C\\uDDF7\\uD83C\\uDDFA</span> '
-  + '<a href="https://leafletjs.com" target="_blank">Leaflet</a>'
+  '<a href="https://leafletjs.com" target="_blank">Leaflet</a>'
 );
 L.tileLayer('{tile_url}', {{
   maxZoom: 19,
@@ -263,7 +285,16 @@ L.tileLayer('{tile_url}', {{
 }}).addTo(map);
 
 const markerById = {{}};
-const featureGroup = L.featureGroup().addTo(map);
+const useCluster = {cluster_flag};
+const featureGroup = useCluster
+  ? L.markerClusterGroup({{
+      chunkedLoading: true,
+      showCoverageOnHover: false,
+      spiderfyOnMaxZoom: true,
+      disableClusteringAtZoom: 17,
+      maxClusterRadius: 60
+    }}).addTo(map)
+  : L.featureGroup().addTo(map);
 
 function buildIcon(num, status, kind) {{
   const size = (kind === 'object') ? 36 : 26;
@@ -292,14 +323,14 @@ function buildPopup(m) {{
          + uin
          + '<small>Камер: ' + m.num + '</small><br/>'
          + '<a class="open-link" href="' + objectLink(m.id) + '">'
-         + '\u270D Перейти в таблицу объекта</a>'
+         + 'Перейти в таблицу объекта</a>'
          + '</div>';
   }}
   return '<div class="cam-popup">'
        + '<b>№' + m.num + '</b> — ' + escHtml(m.name) + '<br/>'
        + escHtml(m.object) + '<br/>'
        + '<small>' + escHtml(m.status) + '</small><br/>'
-       + '<a class="open-link" href="' + openLink(m.id) + '">\u25B6 Открыть в ffplay</a>'
+       + '<a class="open-link" href="' + openLink(m.id) + '">Открыть в ffplay</a>'
        + '<span class="hint">Двойной клик по маркеру — то же самое</span>'
        + '</div>';
 }}
@@ -527,7 +558,12 @@ class CameraMapView(QWidget):
         self._loaded = False
         self._pending_status_updates.clear()
         self._view.setHtml(
-            leaflet_html(markers, dark=self._dark), QUrl("https://local.map/")
+            leaflet_html(
+                markers,
+                dark=self._dark,
+                cluster=(self._mode == "cameras"),
+            ),
+            QUrl("https://local.map/"),
         )
         self._stack.setCurrentWidget(self._view)
 

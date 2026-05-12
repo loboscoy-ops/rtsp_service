@@ -125,7 +125,12 @@ class _Donut(QWidget):
 
 
 class _SiteCard(QFrame):
-    """Карточка одной площадки: имя + УИН + пончик + счётчик камер."""
+    """Карточка одной площадки: имя + УИН + пончик + счётчик камер.
+
+    Карточка переиспользуется между обновлениями дашборда: вместо
+    пересоздания всего набора виджетов мы только заново заполняем
+    данные через :meth:`set_data`.
+    """
 
     clicked = Signal(int)
 
@@ -134,24 +139,6 @@ class _SiteCard(QFrame):
         self.setObjectName("SiteCard")
         self._object_id = int(obj.id)
 
-        online = sum(1 for c in cameras_for_obj if c.status == "online")
-        offline = sum(1 for c in cameras_for_obj if c.status == "offline")
-        unknown = len(cameras_for_obj) - online - offline
-        accent = _ratio_color(online, offline, unknown)
-        uin = _object_uin(cameras_for_obj)
-
-        self.setStyleSheet(
-            "QFrame#SiteCard {"
-            f" background-color: {_CARD_BG};"
-            f" border: 1px solid {_CARD_BORDER};"
-            f" border-left: 3px solid {accent};"
-            " border-radius: 8px;"
-            "}"
-            "QFrame#SiteCard:hover {"
-            f" background-color: {THEME_BG_INPUT};"
-            "}"
-        )
-
         outer = QHBoxLayout(self)
         outer.setContentsMargins(10, 8, 10, 8)
         outer.setSpacing(8)
@@ -159,32 +146,67 @@ class _SiteCard(QFrame):
         text_col = QVBoxLayout()
         text_col.setSpacing(1)
         text_col.setContentsMargins(0, 0, 0, 0)
-        name = QLabel(obj.name or "Объект")
-        name.setStyleSheet(
+        self._name_lab = QLabel("")
+        self._name_lab.setStyleSheet(
             f"color: {THEME_FG}; font-size: 12px; font-weight: 700;"
         )
-        name.setWordWrap(True)
-        uin_label = QLabel(f"УИН: {uin}" if uin else "УИН: —")
-        uin_label.setStyleSheet(f"color: {THEME_FG_MUTED}; font-size: 10px;")
-        text_col.addWidget(name)
-        text_col.addWidget(uin_label)
+        self._name_lab.setWordWrap(True)
+        self._uin_lab = QLabel("")
+        self._uin_lab.setStyleSheet(f"color: {THEME_FG_MUTED}; font-size: 10px;")
+        text_col.addWidget(self._name_lab)
+        text_col.addWidget(self._uin_lab)
         text_col.addStretch(1)
         outer.addLayout(text_col, 1)
 
         donut_col = QVBoxLayout()
         donut_col.setSpacing(1)
         donut_col.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        donut = _Donut(size=52)
-        donut.set_values(online, offline, unknown)
-        donut_col.addWidget(donut, 0, Qt.AlignmentFlag.AlignHCenter)
-        cams_lab = QLabel(f"Камер  {len(cameras_for_obj)}")
-        cams_lab.setStyleSheet(f"color: {THEME_FG_MUTED}; font-size: 10px;")
-        cams_lab.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        donut_col.addWidget(cams_lab)
+        self._donut = _Donut(size=52)
+        donut_col.addWidget(self._donut, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._cams_lab = QLabel("")
+        self._cams_lab.setStyleSheet(f"color: {THEME_FG_MUTED}; font-size: 10px;")
+        self._cams_lab.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        donut_col.addWidget(self._cams_lab)
         outer.addLayout(donut_col)
 
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        self._accent = ""
+        self.set_data(obj, cameras_for_obj)
+
+    @property
+    def object_id(self) -> int:
+        return self._object_id
+
+    def set_data(self, obj: ObjectModel, cameras_for_obj: list[CameraModel]) -> None:
+        """Перепривязать карточку к (возможно, другому) объекту и обновить данные."""
+        self._object_id = int(obj.id)
+
+        online = sum(1 for c in cameras_for_obj if c.status == "online")
+        offline = sum(1 for c in cameras_for_obj if c.status == "offline")
+        unknown = len(cameras_for_obj) - online - offline
+        accent = _ratio_color(online, offline, unknown)
+        uin = _object_uin(cameras_for_obj)
+
+        if accent != self._accent:
+            self._accent = accent
+            self.setStyleSheet(
+                "QFrame#SiteCard {"
+                f" background-color: {_CARD_BG};"
+                f" border: 1px solid {_CARD_BORDER};"
+                f" border-left: 3px solid {accent};"
+                " border-radius: 8px;"
+                "}"
+                "QFrame#SiteCard:hover {"
+                f" background-color: {THEME_BG_INPUT};"
+                "}"
+            )
+
+        self._name_lab.setText(obj.name or "Объект")
+        self._uin_lab.setText(f"УИН: {uin}" if uin else "УИН: —")
+        self._donut.set_values(online, offline, unknown)
+        self._cams_lab.setText(f"Камер  {len(cameras_for_obj)}")
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
@@ -251,6 +273,12 @@ class DashboardView(QWidget):
         self._cards_layout.addStretch(1)
         scroll.setWidget(self._cards_host)
 
+        # Пул переиспользуемых карточек (индекс → виджет).
+        # Приходящий поток обновлений только перепривязывает данные
+        # и при необходимости меняет порядок — это в десятки раз дешевле
+        # пересоздания QFrame/QLabel/QPainter на каждый цикл проверки.
+        self._cards: list[_SiteCard] = []
+
         root.addWidget(side, 0)
 
     # ------------------------------------------------------------------
@@ -263,34 +291,60 @@ class DashboardView(QWidget):
             return
 
         self.map_view.set_objects(objects, cameras)
-        self._rebuild_cards(objects, cameras)
+        self._update_cards(objects, cameras)
 
-    def _rebuild_cards(
+    @staticmethod
+    def _severity_key(obj: ObjectModel, cams: list[CameraModel]):
+        total = len(cams)
+        offline = sum(1 for c in cams if c.status == "offline")
+        unknown = sum(1 for c in cams if c.status == "unknown")
+        online = total - offline - unknown
+        if total == 0:
+            tier = 3  # пустые площадки — в самый низ
+            ratio = 0.0
+        elif offline == total:
+            tier = 0  # всё лежит — наверху
+            ratio = 1.0
+        elif offline > 0:
+            tier = 1  # частично offline
+            ratio = offline / total
+        elif unknown > 0:
+            tier = 2  # есть unknown, нет offline
+            ratio = unknown / total
+        else:
+            tier = 2  # всё ок
+            ratio = 0.0
+        return (tier, -ratio, -offline, -unknown, -online, (obj.name or "").lower())
+
+    def _update_cards(
         self,
         objects: Iterable[ObjectModel],
         cameras: Iterable[CameraModel],
     ) -> None:
-        while self._cards_layout.count() > 1:
-            item = self._cards_layout.takeAt(0)
-            w = item.widget() if item else None
-            if w is not None:
-                w.setParent(None)
-                w.deleteLater()
-
         by_object: dict[int, list[CameraModel]] = {}
         for c in cameras:
             by_object.setdefault(int(c.object_id), []).append(c)
 
-        ordered = sorted(
-            objects,
-            key=lambda o: (
-                -sum(1 for c in by_object.get(int(o.id), []) if c.status == "offline"),
-                o.name.lower(),
-            ),
-        )
-
-        for obj in ordered:
+        ordered: list[tuple[ObjectModel, list[CameraModel]]] = []
+        for obj in objects:
             cams = by_object.get(int(obj.id), [])
+            ordered.append((obj, cams))
+        ordered.sort(key=lambda pair: self._severity_key(pair[0], pair[1]))
+
+        # 1. Дотягиваем пул до нужного размера, добавляя в layout перед stretch.
+        while len(self._cards) < len(ordered):
+            obj, cams = ordered[len(self._cards)]
             card = _SiteCard(obj, cams)
             card.clicked.connect(self.object_selected)
+            self._cards.append(card)
             self._cards_layout.insertWidget(self._cards_layout.count() - 1, card)
+
+        # 2. Обновляем данные на нужном количестве карточек и показываем их.
+        for idx, (obj, cams) in enumerate(ordered):
+            card = self._cards[idx]
+            card.set_data(obj, cams)
+            card.setVisible(True)
+
+        # 3. Лишние карточки прячем (не удаляем — пригодятся в следующий раз).
+        for idx in range(len(ordered), len(self._cards)):
+            self._cards[idx].setVisible(False)

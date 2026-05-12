@@ -91,12 +91,12 @@ class ObjectSidebar(QListWidget):
             name = html.escape(obj.name or "")
             text = (
                 f'<div style="color:{THEME_FG};font-weight:600;">{name}</div>'
-                f'<div style="margin-top:2px;">'
+                f'<div style="margin-top:2px;font-weight:400;">'
                 f'<span style="color:{THEME_FG_MUTED};">Камер: {obj.camera_count}  </span>'
-                f'<span style="color:{STATUS_ONLINE_FG};font-weight:600;">'
+                f'<span style="color:{STATUS_ONLINE_FG};">'
                 f'Online: {obj.online_count}</span>'
                 f'<span style="color:{THEME_FG_MUTED};">  </span>'
-                f'<span style="color:{STATUS_OFFLINE_FG};font-weight:600;">'
+                f'<span style="color:{STATUS_OFFLINE_FG};">'
                 f'Offline: {obj.offline_count}</span>'
                 f'</div>'
             )

@@ -817,6 +817,16 @@ class MainWindow(QMainWindow):
         self._run_check_all_enabled("Автопроверка")
 
     def _run_check_all_enabled(self, log_prefix: str) -> None:
+        # Защита от наложения циклов: если в пуле ещё висят непроверенные
+        # камеры от прошлого тика — пропускаем новый запуск, чтобы пул
+        # не разрастался до тысяч задач при тяжёлом сценарии 5к камер.
+        pool = QThreadPool.globalInstance()
+        if pool.activeThreadCount() >= pool.maxThreadCount():
+            self._log(
+                f"{log_prefix}: предыдущий цикл ещё идёт "
+                f"(активных потоков {pool.activeThreadCount()}/{pool.maxThreadCount()}), пропускаем"
+            )
+            return
         cameras = self.repo.list_cameras(object_id=None, search="", status_filter="all")
         enabled = [c for c in cameras if c.enabled]
         self.checker.check_many(enabled)
@@ -863,7 +873,7 @@ class MainWindow(QMainWindow):
             return ""
         if ping_ok:
             return f" [ping {ping_ms} ms]" if ping_ms is not None else " [ping OK]"
-        return " [ping ✕]"
+        return " [ping fail]"
 
     # ==================================================================
     # clipboard callbacks (от таблицы)

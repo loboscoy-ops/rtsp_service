@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 APP_NAME = "Urus Camera Monitor"
-APP_VERSION = "0.1.54"
+APP_VERSION = "0.1.55"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 IS_FROZEN = bool(getattr(sys, "frozen", False))
@@ -73,7 +73,9 @@ UNKNOWN_OFFLINE_FAIL_MESSAGE = os.getenv(
 )
 # Префикс-код, который ставится в колонку «Ошибка» для любой offline-камеры.
 OFFLINE_ERROR_CODE = os.getenv("RTSP_OFFLINE_ERROR_CODE", "0x00")
-MAX_CONCURRENT_CHECKS = int(os.getenv("RTSP_MAX_CONCURRENT_CHECKS", "6"))
+# 24 потока на ~5000 камер — около ~3,5 минут на полный цикл при NORMAL=5с.
+# Можно поднять переменной окружения RTSP_MAX_CONCURRENT_CHECKS.
+MAX_CONCURRENT_CHECKS = int(os.getenv("RTSP_MAX_CONCURRENT_CHECKS", "24"))
 
 # Параллельная ICMP-проверка хоста камеры (отделяет «сеть упала» от «RTSP сломан»).
 PING_ENABLED = os.getenv("RTSP_PING_ENABLED", "1") == "1"
