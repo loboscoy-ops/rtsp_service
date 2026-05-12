@@ -37,7 +37,7 @@ OBJECT_HOST = "object"
 
 
 def markers_payload(cameras: list["CameraModel"]) -> list[dict]:
-    """Маркеры по камерам (для основного раздела «Карта»)."""
+    """Маркеры по камерам (для основного раздела «Карта» и дашборда)."""
     from app.utils.gps_parse import parse_lat_lon
 
     out: list[dict] = []
@@ -50,6 +50,7 @@ def markers_payload(cameras: list["CameraModel"]) -> list[dict]:
             {
                 "kind": "camera",
                 "id": int(cam.id),
+                "object_id": int(cam.object_id),
                 "num": idx,
                 "lat": lat,
                 "lon": lon,
@@ -242,6 +243,7 @@ html, body, #map {{ height: 100%; margin: 0; padding: 0; background: {body_bg}; 
 .cam-popup .open-link {{
   display: inline-block;
   margin-top: 6px;
+  margin-right: 6px;
   padding: 6px 12px;
   background: #1f9d55;
   color: #ffffff;
@@ -250,6 +252,8 @@ html, body, #map {{ height: 100%; margin: 0; padding: 0; background: {body_bg}; 
   font-weight: 600;
 }}
 .cam-popup .open-link:hover {{ background: #2bb573; }}
+.cam-popup .open-link-secondary {{ background: #3d8bfd; }}
+.cam-popup .open-link-secondary:hover {{ background: #5a9dff; }}
 .cam-popup .hint {{
   display: block;
   margin-top: 4px;
@@ -328,11 +332,16 @@ function buildPopup(m) {{
          + 'Перейти в таблицу объекта</a>'
          + '</div>';
   }}
+  const objLink = (typeof m.object_id === 'number')
+    ? '<a class="open-link open-link-secondary" href="'
+        + objectLink(m.object_id) + '">Перейти к объекту</a>'
+    : '';
   return '<div class="cam-popup">'
        + '<b>№' + m.num + '</b> — ' + escHtml(m.name) + '<br/>'
        + escHtml(m.object) + '<br/>'
        + '<small>' + escHtml(m.status) + '</small><br/>'
        + '<a class="open-link" href="' + openLink(m.id) + '">Запустить RTSP</a>'
+       + objLink
        + '<span class="hint">Двойной клик по маркеру — то же самое</span>'
        + '</div>';
 }}
@@ -559,10 +568,11 @@ class CameraMapView(QWidget):
 
         self._loaded = False
         self._pending_status_updates.clear()
-        # «Камеры»: радиус 60 px — на 5к точках клики попадают в кластеры.
-        # «Дашборд» (объекты): радиус 18 px — кластер только когда маркеры
-        # реально соприкасаются краями (одна площадка ровно над другой).
-        cluster_radius = 60 if self._mode == "cameras" else 18
+        # «Стопки» только когда маркеры реально перекрываются: радиус
+        # кластера = ~половина диаметра камерного маркера (26 px). Маркеры,
+        # стоящие даже впритык краями (≈26 px от центра до центра), уже
+        # будут двумя отдельными точками, как ожидает пользователь.
+        cluster_radius = 14
         self._view.setHtml(
             leaflet_html(
                 markers,

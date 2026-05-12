@@ -290,7 +290,12 @@ class DashboardView(QWidget):
         except Exception:
             return
 
-        self.map_view.set_objects(objects, cameras)
+        # Раньше дашборд показывал по одному маркеру на площадку (с цифрой
+        # «сколько камер»). Пользователь попросил видеть именно камеры, а не
+        # агрегат «9» — поэтому теперь рисуем те же маркеры, что и в разделе
+        # «Камеры»: один маркер на камеру, склеиваются только реально
+        # перекрывающиеся друг другом точки.
+        self.map_view.set_cameras(cameras)
         self._update_cards(objects, cameras)
 
     @staticmethod
