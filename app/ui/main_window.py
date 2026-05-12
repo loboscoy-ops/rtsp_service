@@ -248,7 +248,7 @@ class MainWindow(QMainWindow):
             return
         self._view_stack.setCurrentIndex(index)
         if index == 1:
-            self.dashboard.refresh()
+            self.dashboard.refresh(status_filter=self.status_filter.currentText())
 
     def _on_dashboard_object_selected(self, object_id: int) -> None:
         """Клик по карточке площадки на дашборде → переходим в раздел
@@ -613,14 +613,14 @@ class MainWindow(QMainWindow):
         self.table.populate(self.cameras_cache)
         if hasattr(self, "map_view"):
             self.map_view.set_cameras(self.cameras_cache)
+        if hasattr(self, "_view_stack") and self._view_stack.currentIndex() == 1:
+            self.dashboard.refresh(status_filter=self.status_filter.currentText())
 
     def _refresh_views_after_checks(self) -> None:
         if self._closing:
             return
         self._refresh_objects()
         self._refresh_cameras()
-        if hasattr(self, "dashboard") and self._view_stack.currentIndex() == 1:
-            self.dashboard.refresh()
 
     # ==================================================================
     # sorting

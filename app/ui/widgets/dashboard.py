@@ -40,6 +40,15 @@ _CARD_BORDER = THEME_BORDER
 _DONUT_TRACK = "#2d3544"
 
 
+def _site_strict_majority_offline(cameras: list[CameraModel]) -> bool:
+    """Дашборд при фильтре статуса «offline»: только площадки со строго >50% камер offline."""
+    total = len(cameras)
+    if total == 0:
+        return False
+    offline = sum(1 for c in cameras if c.status == "offline")
+    return offline / total > 0.5
+
+
 def _ratio_color(online: int, offline: int, unknown: int) -> str:
     total = online + offline + unknown
     if total == 0:
@@ -306,20 +315,42 @@ class DashboardView(QWidget):
 
     # ------------------------------------------------------------------
 
-    def refresh(self) -> None:
+    @staticmethod
+    def _cameras_by_object(cameras: Iterable[CameraModel]) -> dict[int, list[CameraModel]]:
+        by_object: dict[int, list[CameraModel]] = {}
+        for c in cameras:
+            by_object.setdefault(int(c.object_id), []).append(c)
+        return by_object
+
+    def refresh(self, status_filter: str = "all") -> None:
         try:
             objects = self.repo.list_objects()
             cameras = self.repo.list_cameras()
         except Exception:
             return
 
+        sf = (status_filter or "all").strip().lower()
+        by_object = self._cameras_by_object(cameras)
+
+        # При фильтре «offline» на карте и в списке — только площадки,
+        # у которых строго более половины камер offline (полностью online не попадают).
+        if sf == "offline":
+            allowed_ids = {
+                int(obj.id)
+                for obj in objects
+                if _site_strict_majority_offline(by_object.get(int(obj.id), []))
+            }
+            map_cameras = [c for c in cameras if int(c.object_id) in allowed_ids]
+        else:
+            map_cameras = cameras
+
         # Раньше дашборд показывал по одному маркеру на площадку (с цифрой
         # «сколько камер»). Пользователь попросил видеть именно камеры, а не
         # агрегат «9» — поэтому теперь рисуем те же маркеры, что и в разделе
         # «Камеры»: один маркер на камеру, склеиваются только реально
         # перекрывающиеся друг другом точки.
-        self.map_view.set_cameras(cameras)
-        self._update_cards(objects, cameras)
+        self.map_view.set_cameras(map_cameras)
+        self._update_cards(objects, by_object, status_filter=sf)
 
     @staticmethod
     def _severity_key(obj: ObjectModel, cams: list[CameraModel]):
@@ -347,15 +378,17 @@ class DashboardView(QWidget):
     def _update_cards(
         self,
         objects: Iterable[ObjectModel],
-        cameras: Iterable[CameraModel],
+        by_object: dict[int, list[CameraModel]],
+        *,
+        status_filter: str = "all",
     ) -> None:
-        by_object: dict[int, list[CameraModel]] = {}
-        for c in cameras:
-            by_object.setdefault(int(c.object_id), []).append(c)
+        sf = (status_filter or "all").strip().lower()
 
         ordered: list[tuple[ObjectModel, list[CameraModel]]] = []
         for obj in objects:
             cams = by_object.get(int(obj.id), [])
+            if sf == "offline" and not _site_strict_majority_offline(cams):
+                continue
             ordered.append((obj, cams))
         ordered.sort(key=lambda pair: self._severity_key(pair[0], pair[1]))
 
