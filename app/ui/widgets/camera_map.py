@@ -57,6 +57,7 @@ def markers_payload(cameras: list["CameraModel"]) -> list[dict]:
                 "name": cam.camera_name or "",
                 "status": cam.status or "unknown",
                 "object": cam.object_name or "",
+                "uin": (cam.uin or "").strip(),
             }
         )
     return out
@@ -154,6 +155,7 @@ def leaflet_html(
     dark: bool = False,
     cluster: bool = False,
     cluster_radius: int = 60,
+    dashboard_hover: bool = False,
 ) -> str:
     """HTML страницы с интерактивной картой Leaflet.
 
@@ -162,9 +164,9 @@ def leaflet_html(
       - ``fitAllMarkers()`` — снова уместить все маркеры в видимую область.
 
     При ``cluster=True`` маркеры группируются через Leaflet.markercluster.
-    ``cluster_radius`` задаёт расстояние слипания в пикселях: для основной
-    карты (5к камер) ставим ~60, для дашборда — маленькое значение, чтобы
-    группировались только реально соприкасающиеся маркеры.
+
+    ``dashboard_hover=True`` — на карте дашборда при наведении показывается
+    интерактивная «плашка»: имя объекта, УИН и кнопка перехода в таблицу.
     """
     # Вставляем как JS-литерал; \u003c — чтобы случайный "</" в данных не закрыл <script>.
     markers_json = json.dumps(markers, ensure_ascii=False)
@@ -211,6 +213,7 @@ def leaflet_html(
         if cluster else ""
     )
     cluster_flag = "true" if cluster else "false"
+    dash_hover_flag = "true" if dashboard_hover else "false"
 
     return f"""<!DOCTYPE html>
 <html><head>
@@ -260,6 +263,62 @@ html, body, #map {{ height: 100%; margin: 0; padding: 0; background: {body_bg}; 
   color: {hint_fg};
   font-size: 11px;
 }}
+.leaflet-tooltip.cam-hover-tip {{
+  padding: 0;
+  border: 1px solid {popup_border};
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.22);
+  background: {popup_bg};
+  color: {popup_fg};
+  font-family: system-ui, sans-serif;
+}}
+.leaflet-tooltip.cam-hover-tip .leaflet-tooltip-content {{
+  margin: 0;
+}}
+.cam-hover {{
+  padding: 10px 12px;
+  min-width: 200px;
+  max-width: 280px;
+}}
+.cam-hover .hover-title {{
+  font-weight: 700;
+  font-size: 14px;
+  margin-bottom: 4px;
+}}
+.cam-hover .hover-uin {{
+  font-size: 12px;
+  color: {hint_fg};
+  margin-bottom: 8px;
+}}
+.cam-hover .hover-uin.muted {{
+  font-style: italic;
+}}
+.cam-hover .hover-open-link {{
+  display: inline-block;
+  padding: 6px 12px;
+  background: #3d8bfd;
+  color: #ffffff !important;
+  border-radius: 6px;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 13px;
+}}
+.cam-hover .hover-open-link:hover {{
+  background: #5a9dff;
+}}
+.cam-hover-stack {{
+  padding: 10px 12px;
+  min-width: 200px;
+  max-width: 300px;
+}}
+.cam-hover-stack .cam-hover {{
+  padding: 8px 0;
+  min-width: auto;
+  max-width: none;
+}}
+.cam-hover-stack .cam-hover:not(:first-child) {{
+  border-top: 1px solid {popup_border};
+}}
 </style>
 </head><body>
 <div id="map"></div>
@@ -277,6 +336,66 @@ function statusClass(s) {{
   if (s === 'online') return 'cam-online';
   if (s === 'offline') return 'cam-offline';
   return 'cam-unknown';
+}}
+const dashHover = {dash_hover_flag};
+
+function buildHoverPanel(objName, uin, objectId) {{
+  const title = '<div class="hover-title">' + escHtml(objName || 'Объект') + '</div>';
+  const uinDiv = uin
+    ? '<div class="hover-uin">УИН: ' + escHtml(uin) + '</div>'
+    : '<div class="hover-uin muted">УИН не указан</div>';
+  const btn = '<a class="hover-open-link" href="' + objectLink(objectId) + '">'
+    + 'Перейти в таблицу объекта</a>';
+  return '<div class="cam-hover">' + title + uinDiv + btn + '</div>';
+}}
+
+function attachDashboardHover(marker, m) {{
+  if (!dashHover || m.kind !== 'camera' || typeof m.object_id !== 'number') return;
+  marker.bindTooltip(
+    buildHoverPanel(m.object, m.uin || '', m.object_id),
+    {{
+      sticky: true,
+      direction: 'auto',
+      opacity: 1,
+      interactive: true,
+      className: 'cam-hover-tip'
+    }}
+  );
+}}
+
+function bindClusterDashboardHover(layer) {{
+  if (!dashHover || !useCluster) return;
+  layer.on('clustermouseover', function (ev) {{
+    const cluster = ev.layer;
+    const kids = cluster.getAllChildMarkers();
+    const seen = {{}};
+    let html = '';
+    kids.forEach(function (mk) {{
+      const meta = mk._meta;
+      if (!meta || typeof meta.object_id !== 'number') return;
+      const oid = meta.object_id;
+      if (seen[oid]) return;
+      seen[oid] = true;
+      html += buildHoverPanel(meta.object || '', meta.uin || '', oid);
+    }});
+    if (!html) {{
+      html = '<div class="cam-hover"><small>Нет данных об объекте</small></div>';
+    }} else {{
+      html = '<div class="cam-hover-stack">' + html + '</div>';
+    }}
+    cluster.bindTooltip(html, {{
+      sticky: true,
+      direction: 'auto',
+      opacity: 1,
+      interactive: true,
+      className: 'cam-hover-tip'
+    }}).openTooltip();
+  }});
+  layer.on('clustermouseout', function (ev) {{
+    const cluster = ev.layer;
+    cluster.closeTooltip();
+    cluster.unbindTooltip();
+  }});
 }}
 const markers = {markers_json};
 const map = L.map('map', {{ zoomControl: true }});
@@ -302,6 +421,9 @@ const featureGroup = useCluster
     }}).addTo(map)
   : L.featureGroup().addTo(map);
 
+if (useCluster && dashHover) {{
+  bindClusterDashboardHover(featureGroup);
+}}
 function buildIcon(num, status, kind) {{
   const size = (kind === 'object') ? 36 : 26;
   const inner = (kind === 'object') ? 32 : 22;
@@ -355,6 +477,7 @@ function addMarker(m) {{
   }});
   marker._meta = m;
   marker.bindPopup(buildPopup(m), {{ className: 'cam-popup' }});
+  attachDashboardHover(marker, m);
   marker.on('dblclick', function (ev) {{
     L.DomEvent.stopPropagation(ev);
     window.location.href = (m.kind === 'object') ? objectLink(m.id) : openLink(m.id);
@@ -459,6 +582,7 @@ class CameraMapView(QWidget):
         *,
         dark: bool = False,
         cluster: bool = False,
+        dashboard_hover: bool = False,
     ):
         super().__init__(parent)
         self._dark = dark
@@ -467,6 +591,8 @@ class CameraMapView(QWidget):
         # Включаем только для дашбордной мини-карты, чтобы при общем виде
         # на регион камеры собирались в стопки с количеством.
         self._cluster = cluster
+        # Плашка при наведении (объект / УИН / кнопка) — только дашборд.
+        self._dashboard_hover = dashboard_hover
         self._stack = QStackedWidget(self)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -588,6 +714,7 @@ class CameraMapView(QWidget):
                 dark=self._dark,
                 cluster=self._cluster,
                 cluster_radius=80,
+                dashboard_hover=self._dashboard_hover,
             ),
             QUrl("https://local.map/"),
         )

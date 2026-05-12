@@ -1,7 +1,7 @@
-"""Дашборд: светлая карта (по площадкам) + список «Площадки» с пончиками.
+"""Дашборд: карта камер + список «Площадки» с пончиками статусов.
 
-Маркеры на карте — по одной точке на объект, в кружке количество камер.
-Клик по маркеру или карточке открывает таблицу нужного объекта.
+На карте дашборда каждая камера — свой маркер (при необходимости кластеры).
+При наведении — всплывающая плашка с объектом, УИН и переходом в таблицу.
 """
 from __future__ import annotations
 
@@ -106,20 +106,31 @@ class _Donut(QWidget):
                     painter.drawArc(rect, start, span)
                     start += span
 
-            painter.setPen(QColor(THEME_FG))
             font = painter.font()
             font.setBold(True)
-            font.setPointSize(8 if self._size <= 56 else 10)
+            font.setPointSize(9 if self._size <= 56 else 11)
             painter.setFont(font)
             if total == 0:
-                text = "—"
+                painter.setPen(QColor(THEME_FG))
+                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "—")
             elif self._offline == 0 and self._unknown == 0:
-                text = "100%\nOK"
+                painter.setPen(QColor(STATUS_ONLINE_FG))
+                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "OK")
+            elif self._offline > 0:
+                painter.setPen(QColor(STATUS_OFFLINE_FG))
+                painter.drawText(
+                    rect,
+                    Qt.AlignmentFlag.AlignCenter,
+                    str(self._offline),
+                )
             else:
-                ok_pct = round(self._online / total * 100)
-                bad_pct = 100 - ok_pct
-                text = f"{ok_pct}%\n{bad_pct}%"
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+                # Есть только «unknown» — без красного сегмента, считаем проблемными.
+                painter.setPen(QColor(PING_BLOCKED_COLOR))
+                painter.drawText(
+                    rect,
+                    Qt.AlignmentFlag.AlignCenter,
+                    str(self._unknown),
+                )
         finally:
             painter.end()
 
@@ -237,7 +248,12 @@ class DashboardView(QWidget):
         # cluster=True — на мини-карте дашборда камеры одного района
         # собираются в стопки с количеством (Leaflet.markercluster). На
         # основной карте «Камеры» кластеризация по-прежнему выключена.
-        self.map_view = CameraMapView(self, dark=False, cluster=True)
+        self.map_view = CameraMapView(
+            self,
+            dark=False,
+            cluster=True,
+            dashboard_hover=True,
+        )
         map_layout.addWidget(self.map_view)
         root.addWidget(map_wrap, 2)
 
