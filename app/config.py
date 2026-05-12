@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 APP_NAME = "Urus Camera Monitor"
-APP_VERSION = "0.1.70"
+APP_VERSION = "0.1.71"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 IS_FROZEN = bool(getattr(sys, "frozen", False))
@@ -78,11 +78,14 @@ OFFLINE_ERROR_CODE = os.getenv("RTSP_OFFLINE_ERROR_CODE", "0x00")
 # Можно поднять переменной окружения RTSP_MAX_CONCURRENT_CHECKS.
 MAX_CONCURRENT_CHECKS = int(os.getenv("RTSP_MAX_CONCURRENT_CHECKS", "24"))
 # Дополнительные лимиты, чтобы не перегружать один объект/регистратор.
+# Важно: при дефолте «1 на host» все камеры с одного IP (типичный NVR)
+# проверяются строго по очереди — полный опрос площадки заметно растягивается.
+# Для слабых регистраторов можно понизить через переменные окружения.
 MAX_CONCURRENT_CHECKS_PER_OBJECT = int(
-    os.getenv("RTSP_MAX_CONCURRENT_CHECKS_PER_OBJECT", "2")
+    os.getenv("RTSP_MAX_CONCURRENT_CHECKS_PER_OBJECT", "4")
 )
 MAX_CONCURRENT_CHECKS_PER_HOST = int(
-    os.getenv("RTSP_MAX_CONCURRENT_CHECKS_PER_HOST", "1")
+    os.getenv("RTSP_MAX_CONCURRENT_CHECKS_PER_HOST", "4")
 )
 
 # Параллельная ICMP-проверка хоста камеры (отделяет «сеть упала» от «RTSP сломан»).
