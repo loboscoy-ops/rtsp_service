@@ -82,7 +82,7 @@ def fallback_html(markers: list[dict], skipped: int) -> str:
     return "\n".join(lines)
 
 
-def leaflet_html(markers: list[dict]) -> str:
+def leaflet_html(markers: list[dict], *, dark: bool = False) -> str:
     """HTML страницы с интерактивной картой Leaflet.
 
     Скрипт регистрирует две глобальные функции:
@@ -94,17 +94,43 @@ def leaflet_html(markers: list[dict]) -> str:
     markers_json = markers_json.replace("<", "\\u003c")
     open_link = f"{OPEN_SCHEME}://{OPEN_HOST}/"
 
+    if dark:
+        body_bg = "#12141a"
+        container_bg = "#0f1218"
+        marker_border = "#0f1218"
+        popup_bg = "#1a1e28"
+        popup_fg = "#e8eaed"
+        popup_border = "#2d3544"
+        hint_fg = "#8b929e"
+        tile_url = "https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png"
+        tile_attr = (
+            "&copy; <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a>"
+            " &copy; <a href=\"https://carto.com/attributions\">CARTO</a>"
+        )
+        tile_subdomains = "abcd"
+    else:
+        body_bg = "#ffffff"
+        container_bg = "#f5f5f5"
+        marker_border = "#ffffff"
+        popup_bg = "#ffffff"
+        popup_fg = "#1f2330"
+        popup_border = "#d6d8dc"
+        hint_fg = "#6b7280"
+        tile_url = "https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png"
+        tile_attr = "&copy; <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a>"
+        tile_subdomains = "abc"
+
     return f"""<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8"/>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
-html, body, #map {{ height: 100%; margin: 0; padding: 0; background: #ffffff; }}
-.leaflet-container {{ background: #f5f5f5; }}
+html, body, #map {{ height: 100%; margin: 0; padding: 0; background: {body_bg}; }}
+.leaflet-container {{ background: {container_bg}; }}
 .cam-num {{
   width: 26px; height: 26px; border-radius: 50%;
-  border: 2px solid #ffffff; color: #ffffff; font: bold 12px/22px system-ui, sans-serif;
+  border: 2px solid {marker_border}; color: #ffffff; font: bold 12px/22px system-ui, sans-serif;
   text-align: center; line-height: 22px;
   box-shadow: 0 1px 4px rgba(0,0,0,.45);
   cursor: pointer;
@@ -113,12 +139,12 @@ html, body, #map {{ height: 100%; margin: 0; padding: 0; background: #ffffff; }}
 .cam-offline {{ background: #c43c3c; }}
 .cam-unknown {{ background: #6b7280; }}
 .cam-popup .leaflet-popup-content-wrapper {{
-  background: #ffffff;
-  color: #1f2330;
+  background: {popup_bg};
+  color: {popup_fg};
   border-radius: 8px;
-  border: 1px solid #d6d8dc;
+  border: 1px solid {popup_border};
 }}
-.cam-popup .leaflet-popup-tip {{ background: #ffffff; }}
+.cam-popup .leaflet-popup-tip {{ background: {popup_bg}; }}
 .cam-popup .open-link {{
   display: inline-block;
   margin-top: 6px;
@@ -133,7 +159,7 @@ html, body, #map {{ height: 100%; margin: 0; padding: 0; background: #ffffff; }}
 .cam-popup .hint {{
   display: block;
   margin-top: 4px;
-  color: #6b7280;
+  color: {hint_fg};
   font-size: 11px;
 }}
 </style>
@@ -157,9 +183,10 @@ map.attributionControl.setPrefix(
   '<span aria-hidden="true">\\uD83C\\uDDF7\\uD83C\\uDDFA</span> '
   + '<a href="https://leafletjs.com" target="_blank">Leaflet</a>'
 );
-L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+L.tileLayer('{tile_url}', {{
   maxZoom: 19,
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+  subdomains: '{tile_subdomains}',
+  attribution: '{tile_attr}'
 }}).addTo(map);
 
 const markerById = {{}};
@@ -277,8 +304,9 @@ class CameraMapView(QWidget):
 
     open_camera_requested = Signal(int)
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: Optional[QWidget] = None, *, dark: bool = False):
         super().__init__(parent)
+        self._dark = dark
         self._stack = QStackedWidget(self)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -356,7 +384,9 @@ class CameraMapView(QWidget):
 
         self._loaded = False
         self._pending_status_updates.clear()
-        self._view.setHtml(leaflet_html(markers), QUrl("https://local.map/"))
+        self._view.setHtml(
+            leaflet_html(markers, dark=self._dark), QUrl("https://local.map/")
+        )
         self._stack.setCurrentWidget(self._view)
 
     def update_camera_status(self, camera_id: int, status: str) -> None:

@@ -1,19 +1,23 @@
-"""Дашборд: KPI-карточки + сводки по объектам/проверкам.
+"""Дашборд: тёмная карта + список «Площадки» с пончик-диаграммами.
 
-Перерисовывается из MainWindow при переключении на раздел и после автопроверок.
+Дизайн повторяет утверждённый мокап:
+  - слева большая карта (CARTO dark) с маркерами/кластерами,
+  - справа скроллящийся список карточек объектов с цветной полоской
+    слева, названием/адресом, пончик-диаграммой online/offline и
+    счётчиком камер.
 """
 from __future__ import annotations
 
+import math
 from typing import Iterable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -22,136 +26,234 @@ from PySide6.QtWidgets import (
 from app.database.models import CameraModel, ObjectModel
 from app.database.repository import Repository
 from app.ui.constants import (
-    PING_OK_COLOR,
+    PING_BLOCKED_COLOR,
     STATUS_OFFLINE_FG,
     STATUS_ONLINE_FG,
-    STATUS_UNKNOWN_FG,
-    THEME_ACCENT,
+    THEME_BG_INPUT,
     THEME_BG_PANEL,
+    THEME_BG_WINDOW,
     THEME_BORDER,
     THEME_FG,
     THEME_FG_MUTED,
 )
+from app.ui.widgets.camera_map import CameraMapView
 
 
-_CARD_QSS = (
-    f"#StatCard {{ background-color: {THEME_BG_PANEL}; "
-    f"border: 1px solid {THEME_BORDER}; border-radius: 10px; }}"
-)
+_CARD_BG = THEME_BG_PANEL
+_CARD_BORDER = THEME_BORDER
+_DONUT_TRACK = "#2d3544"
 
 
-class _StatCard(QFrame):
-    def __init__(self, title: str, value_color: str, parent: QWidget | None = None) -> None:
+def _ratio_color(online: int, offline: int, unknown: int) -> str:
+    total = online + offline + unknown
+    if total == 0:
+        return THEME_FG_MUTED
+    if offline == 0 and unknown == 0:
+        return STATUS_ONLINE_FG
+    if offline / total >= 0.4:
+        return STATUS_OFFLINE_FG
+    return PING_BLOCKED_COLOR
+
+
+class _Donut(QWidget):
+    """Круговая диаграмма online/offline/unknown с числовой подписью внутри."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("StatCard")
-        self.setStyleSheet(_CARD_QSS)
+        self._online = 0
+        self._offline = 0
+        self._unknown = 0
+        self.setFixedSize(72, 72)
+
+    def set_values(self, online: int, offline: int, unknown: int) -> None:
+        self._online = max(0, online)
+        self._offline = max(0, offline)
+        self._unknown = max(0, unknown)
+        self.update()
+
+    def paintEvent(self, _event) -> None:  # noqa: N802
+        total = self._online + self._offline + self._unknown
+        rect = self.rect().adjusted(2, 2, -2, -2)
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            pen_track = QPen(QColor(_DONUT_TRACK))
+            pen_track.setWidth(8)
+            pen_track.setCapStyle(Qt.PenCapStyle.FlatCap)
+            painter.setPen(pen_track)
+            painter.drawArc(rect, 0, 360 * 16)
+
+            if total > 0:
+                # Углы Qt: 1/16 градуса; 0° — справа, идём против часовой.
+                start = 90 * 16  # стартуем сверху
+                segments = (
+                    (self._online, STATUS_ONLINE_FG),
+                    (self._unknown, PING_BLOCKED_COLOR),
+                    (self._offline, STATUS_OFFLINE_FG),
+                )
+                for value, color in segments:
+                    if value <= 0:
+                        continue
+                    span = -int(round(360 * 16 * value / total))
+                    pen = QPen(QColor(color))
+                    pen.setWidth(8)
+                    pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+                    painter.setPen(pen)
+                    painter.drawArc(rect, start, span)
+                    start += span
+
+            painter.setPen(QColor(THEME_FG))
+            font = painter.font()
+            font.setBold(True)
+            font.setPointSize(10)
+            painter.setFont(font)
+            if total == 0:
+                text = "—"
+            elif self._offline == 0 and self._unknown == 0:
+                text = "100%\nOK"
+            else:
+                ok_pct = round(self._online / total * 100)
+                bad_pct = 100 - ok_pct
+                text = f"{ok_pct}%\n{bad_pct}%"
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+        finally:
+            painter.end()
+
+
+class _SiteCard(QFrame):
+    """Карточка одного объекта со светящейся боковой полоской и пончиком."""
+
+    clicked = Signal(int)
+
+    def __init__(self, obj: ObjectModel, cameras_for_obj: list[CameraModel]) -> None:
+        super().__init__()
+        self.setObjectName("SiteCard")
+        self._object_id = int(obj.id)
+        online = sum(1 for c in cameras_for_obj if c.status == "online")
+        offline = sum(1 for c in cameras_for_obj if c.status == "offline")
+        unknown = len(cameras_for_obj) - online - offline
+        accent = _ratio_color(online, offline, unknown)
+
+        self.setStyleSheet(
+            "QFrame#SiteCard {"
+            f" background-color: {_CARD_BG};"
+            f" border: 1px solid {_CARD_BORDER};"
+            f" border-left: 4px solid {accent};"
+            " border-radius: 10px;"
+            "}"
+            "QFrame#SiteCard:hover {"
+            f" background-color: {THEME_BG_INPUT};"
+            "}"
+        )
+
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(14, 12, 14, 12)
+        outer.setSpacing(12)
+
+        text_col = QVBoxLayout()
+        text_col.setSpacing(2)
+        text_col.setContentsMargins(0, 0, 0, 0)
+        name = QLabel(obj.name or "Объект")
+        name.setStyleSheet(
+            f"color: {THEME_FG}; font-size: 14px; font-weight: 700;"
+        )
+        addr = QLabel(self._fake_address(obj.name))
+        addr.setStyleSheet(f"color: {THEME_FG_MUTED}; font-size: 11px;")
+        addr.setWordWrap(True)
+        text_col.addWidget(name)
+        text_col.addWidget(addr)
+        text_col.addStretch(1)
+
+        outer.addLayout(text_col, 1)
+
+        donut_col = QVBoxLayout()
+        donut_col.setSpacing(2)
+        donut_col.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        donut = _Donut()
+        donut.set_values(online, offline, unknown)
+        donut_col.addWidget(donut, 0, Qt.AlignmentFlag.AlignHCenter)
+        cams_lab = QLabel(f"Камер  {len(cameras_for_obj)}")
+        cams_lab.setStyleSheet(f"color: {THEME_FG_MUTED}; font-size: 11px;")
+        cams_lab.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        donut_col.addWidget(cams_lab)
+        outer.addLayout(donut_col)
+
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setMinimumHeight(100)
 
-        v = QVBoxLayout(self)
-        v.setContentsMargins(18, 14, 18, 14)
-        v.setSpacing(6)
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self._object_id)
+        super().mouseReleaseEvent(event)
 
-        self._title = QLabel(title)
-        self._title.setStyleSheet(
-            f"color: {THEME_FG_MUTED}; font-size: 12px; font-weight: 600;"
-            " letter-spacing: 0.5px;"
-        )
-        self._value = QLabel("—")
-        self._value.setStyleSheet(
-            f"color: {value_color}; font-size: 30px; font-weight: 700;"
-        )
-        self._sub = QLabel("")
-        self._sub.setStyleSheet(f"color: {THEME_FG_MUTED}; font-size: 11px;")
-        self._sub.setVisible(False)
-
-        v.addWidget(self._title)
-        v.addWidget(self._value)
-        v.addWidget(self._sub)
-        v.addStretch(1)
-
-    def set_value(self, text: str, sub: str = "") -> None:
-        self._value.setText(text)
-        if sub:
-            self._sub.setText(sub)
-            self._sub.setVisible(True)
-        else:
-            self._sub.setVisible(False)
-
-
-def _list_card(title: str) -> tuple[QFrame, QListWidget]:
-    wrap = QFrame()
-    wrap.setObjectName("StatCard")
-    wrap.setStyleSheet(_CARD_QSS)
-    layout = QVBoxLayout(wrap)
-    layout.setContentsMargins(16, 14, 16, 14)
-    layout.setSpacing(8)
-
-    header = QLabel(title)
-    header.setStyleSheet(f"color: {THEME_FG_MUTED}; font-weight: 600;")
-    layout.addWidget(header)
-
-    lst = QListWidget()
-    lst.setStyleSheet(
-        "QListWidget { background-color: transparent; border: none; }"
-        " QListWidget::item { padding: 6px 4px; }"
-    )
-    lst.setSelectionMode(QListWidget.SelectionMode.NoSelection)
-    layout.addWidget(lst, 1)
-    return wrap, lst
+    @staticmethod
+    def _fake_address(name: str) -> str:
+        # У нас в БД сейчас нет адреса — показываем понятный фолбэк.
+        return name or ""
 
 
 class DashboardView(QWidget):
+    """Главный виджет дашборда."""
+
+    object_selected = Signal(int)
+
     def __init__(self, repo: Repository, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.repo = repo
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(20, 16, 20, 16)
-        root.setSpacing(16)
+        self.setStyleSheet(f"DashboardView {{ background-color: {THEME_BG_WINDOW}; }}")
 
-        title = QLabel("Дашборд")
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # --- карта слева
+        map_wrap = QFrame()
+        map_wrap.setStyleSheet(f"QFrame {{ background-color: {THEME_BG_WINDOW}; }}")
+        map_layout = QVBoxLayout(map_wrap)
+        map_layout.setContentsMargins(0, 0, 0, 0)
+        self.map_view = CameraMapView(self, dark=True)
+        map_layout.addWidget(self.map_view)
+        root.addWidget(map_wrap, 2)
+
+        # --- правая колонка
+        side = QFrame()
+        side.setObjectName("SidePane")
+        side.setStyleSheet(
+            "QFrame#SidePane {"
+            f" background-color: {THEME_BG_WINDOW};"
+            f" border-left: 1px solid {THEME_BORDER};"
+            "}"
+        )
+        side.setFixedWidth(360)
+
+        side_layout = QVBoxLayout(side)
+        side_layout.setContentsMargins(16, 14, 16, 14)
+        side_layout.setSpacing(10)
+
+        title = QLabel("Площадки")
         title.setStyleSheet(
-            f"font-size: 22px; font-weight: 700; color: {THEME_FG};"
+            f"color: {THEME_FG}; font-size: 18px; font-weight: 700; padding-left: 2px;"
         )
-        root.addWidget(title)
+        side_layout.addWidget(title)
 
-        cards = QGridLayout()
-        cards.setHorizontalSpacing(14)
-        cards.setVerticalSpacing(14)
-        root.addLayout(cards)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        side_layout.addWidget(scroll, 1)
 
-        self.card_objects = _StatCard("Объектов", THEME_ACCENT)
-        self.card_total = _StatCard("Камер всего", THEME_FG)
-        self.card_online = _StatCard("Online", STATUS_ONLINE_FG)
-        self.card_offline = _StatCard("Offline", STATUS_OFFLINE_FG)
-        self.card_unknown = _StatCard("Unknown", STATUS_UNKNOWN_FG)
-        self.card_ping = _StatCard("Сеть OK (ping)", PING_OK_COLOR)
+        self._cards_host = QWidget()
+        self._cards_host.setStyleSheet("background: transparent;")
+        self._cards_layout = QVBoxLayout(self._cards_host)
+        self._cards_layout.setContentsMargins(0, 0, 0, 0)
+        self._cards_layout.setSpacing(10)
+        self._cards_layout.addStretch(1)
+        scroll.setWidget(self._cards_host)
 
-        for i, card in enumerate(
-            [
-                self.card_objects,
-                self.card_total,
-                self.card_online,
-                self.card_offline,
-                self.card_unknown,
-                self.card_ping,
-            ]
-        ):
-            cards.addWidget(card, i // 3, i % 3)
+        root.addWidget(side, 0)
 
-        bottom = QHBoxLayout()
-        bottom.setSpacing(14)
-        root.addLayout(bottom, 1)
-
-        self._offline_card, self._offline_list = _list_card(
-            "Объекты с offline-камерами (топ 8)"
-        )
-        self._recent_card, self._recent_list = _list_card(
-            "Недавно проверенные камеры (топ 8)"
-        )
-        bottom.addWidget(self._offline_card, 1)
-        bottom.addWidget(self._recent_card, 1)
+    # ------------------------------------------------------------------
 
     def refresh(self) -> None:
         try:
@@ -160,61 +262,36 @@ class DashboardView(QWidget):
         except Exception:
             return
 
-        self._update_cards(objects, cameras)
-        self._update_offline_list(cameras)
-        self._update_recent_list(cameras)
+        self.map_view.set_cameras(cameras)
+        self._rebuild_cards(objects, cameras)
 
-    def _update_cards(
+    def _rebuild_cards(
         self,
-        objects: list[ObjectModel],
-        cameras: list[CameraModel],
+        objects: Iterable[ObjectModel],
+        cameras: Iterable[CameraModel],
     ) -> None:
-        total = len(cameras)
-        online = sum(1 for c in cameras if c.status == "online")
-        offline = sum(1 for c in cameras if c.status == "offline")
-        unknown = total - online - offline
-        ping_ok = sum(1 for c in cameras if c.last_ping_ok)
+        # Сносим старые карточки (хвостовой stretch не трогаем).
+        while self._cards_layout.count() > 1:
+            item = self._cards_layout.takeAt(0)
+            w = item.widget() if item else None
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
 
-        def pct(part: int) -> str:
-            return f"{(part / total * 100):.0f}% от {total}" if total else "—"
-
-        self.card_objects.set_value(str(len(objects)))
-        self.card_total.set_value(str(total))
-        self.card_online.set_value(str(online), pct(online))
-        self.card_offline.set_value(str(offline), pct(offline))
-        self.card_unknown.set_value(str(unknown), pct(unknown))
-        self.card_ping.set_value(str(ping_ok), pct(ping_ok))
-
-    def _update_offline_list(self, cameras: Iterable[CameraModel]) -> None:
-        per_object: dict[str, int] = {}
+        by_object: dict[int, list[CameraModel]] = {}
         for c in cameras:
-            if c.status == "offline":
-                per_object[c.object_name] = per_object.get(c.object_name, 0) + 1
+            by_object.setdefault(int(c.object_id), []).append(c)
 
-        self._offline_list.clear()
-        if not per_object:
-            item = QListWidgetItem("Все камеры в порядке")
-            item.setForeground(Qt.GlobalColor.gray)
-            self._offline_list.addItem(item)
-            return
-        for name, cnt in sorted(per_object.items(), key=lambda kv: (-kv[1], kv[0]))[:8]:
-            self._offline_list.addItem(QListWidgetItem(f"{name}  —  {cnt}"))
+        ordered = sorted(
+            objects,
+            key=lambda o: (
+                -sum(1 for c in by_object.get(int(o.id), []) if c.status == "offline"),
+                o.name.lower(),
+            ),
+        )
 
-    def _update_recent_list(self, cameras: Iterable[CameraModel]) -> None:
-        recent = sorted(
-            (c for c in cameras if c.last_checked_at),
-            key=lambda c: c.last_checked_at or "",
-            reverse=True,
-        )[:8]
-        self._recent_list.clear()
-        if not recent:
-            item = QListWidgetItem("Ещё нет проверок")
-            item.setForeground(Qt.GlobalColor.gray)
-            self._recent_list.addItem(item)
-            return
-        for c in recent:
-            ts = (c.last_checked_at or "").replace("T", " ")[:19]
-            name = c.camera_name or c.camera_identifier
-            self._recent_list.addItem(
-                QListWidgetItem(f"{c.object_name}: {name} — {c.status}   ({ts})")
-            )
+        for obj in ordered:
+            cams = by_object.get(int(obj.id), [])
+            card = _SiteCard(obj, cams)
+            card.clicked.connect(self.object_selected)
+            self._cards_layout.insertWidget(self._cards_layout.count() - 1, card)

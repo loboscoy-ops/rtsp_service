@@ -201,6 +201,8 @@ class MainWindow(QMainWindow):
         stack = QStackedWidget()
         stack.addWidget(self._build_central_splitter())
         self.dashboard = DashboardView(self.repo)
+        self.dashboard.object_selected.connect(self._on_dashboard_object_selected)
+        self.dashboard.map_view.open_camera_requested.connect(self._open_camera_stream)
         stack.addWidget(self.dashboard)
         self._view_stack = stack
         return stack
@@ -211,6 +213,14 @@ class MainWindow(QMainWindow):
         self._view_stack.setCurrentIndex(index)
         if index == 1:
             self.dashboard.refresh()
+
+    def _on_dashboard_object_selected(self, object_id: int) -> None:
+        """Клик по карточке площадки на дашборде → переходим в раздел
+        «Камеры» и выбираем этот объект в сайдбаре.
+        """
+        self.cameras_view_btn.setChecked(True)
+        self._switch_view(0)
+        self.sidebar.select_object(object_id)
 
     def _build_central_splitter(self) -> QSplitter:
         splitter = QSplitter()

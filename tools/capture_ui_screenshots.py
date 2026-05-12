@@ -79,21 +79,53 @@ def main() -> int:
     repo = Repository()
     repo.seed_demo_data()
 
-    # Точка на карте для демо-маркера (Москва).
+    # Расширенный демо-набор объектов и камер для дашборда.
+    demo_sites = [
+        ("Криворожская", "55.8990, 37.4290", "online"),
+        ("Циолковского", "55.9120, 37.8270", "offline"),
+        ("Форсайт", "55.6740, 37.2710", "online"),
+        ("Руновский", "55.4350, 37.5520", "unknown"),
+        ("Домодедовская", "55.4080, 37.7530", "online"),
+        ("Балашиха", "55.7960, 37.9380", "offline"),
+    ]
+    for idx, (site_name, coords, status) in enumerate(demo_sites, start=1):
+        oid = repo.get_or_create_object(site_name)
+        for cam_idx in range(1, 4 if idx % 2 else 3):
+            cam_id, _ = repo.upsert_camera_for_object_name(
+                object_name=site_name,
+                camera_identifier=f"{site_name.lower()[:5]}-cam-{cam_idx:02d}",
+                camera_name=f"Камера {cam_idx}",
+                group_name="Двор" if cam_idx % 2 else "Периметр",
+                rtsp_url=f"rtsp://demo:demo@10.0.{idx}.{cam_idx}/stream",
+                enabled=True,
+                gps_coords=coords,
+            )
+            override = status if cam_idx == 1 else "online"
+            repo.update_camera_status(
+                camera_id=cam_id,
+                status=override,
+                last_checked_at="2026-05-12T13:55:00",
+                last_error=None if override == "online" else "demo offline",
+                last_seen_online_at="2026-05-12T13:55:00" if override == "online" else None,
+                last_ping_ok=override == "online",
+                last_ping_ms=120 if override == "online" else None,
+            )
+
     cams = repo.list_cameras()
     if cams:
         cam = cams[0]
-        repo.update_camera(
-            cam.id,
-            cam.object_id,
-            cam.camera_identifier,
-            cam.camera_name,
-            cam.group_name,
-            cam.rtsp_url,
-            cam.enabled,
-            gps_coords="55.751244, 37.618423",
-            uin=cam.uin or "",
-        )
+        if not (cam.gps_coords or "").strip():
+            repo.update_camera(
+                cam.id,
+                cam.object_id,
+                cam.camera_identifier,
+                cam.camera_name,
+                cam.group_name,
+                cam.rtsp_url,
+                cam.enabled,
+                gps_coords="55.751244, 37.618423",
+                uin=cam.uin or "",
+            )
 
     app = QApplication(sys.argv)
     app.setApplicationName(config.APP_NAME)
