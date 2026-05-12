@@ -467,7 +467,7 @@ class ImportService:
 
         return preview
 
-    def import_valid_rows(self, preview: ImportPreview) -> tuple[int, int, str | None]:
+    def import_valid_rows(self, preview: ImportPreview) -> tuple[int, int, int | None]:
         valid = preview.valid_rows
         if not valid:
             return 0, 0, None

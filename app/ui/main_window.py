@@ -695,8 +695,17 @@ class MainWindow(QMainWindow):
             pick = current_id
         if pick is not None:
             self.sidebar.select_object(pick)
+            # Всегда синхронизируем: после populate() первая строка могла уже
+            # совпадать с pick — тогда Qt не шлёт currentItemChanged, и таблица
+            # камер оставалась на старом current_object_id.
+            self.current_object_id = pick
+            item = self.sidebar.currentItem()
+            if item is not None:
+                self.sidebar.scrollToItem(item)
         elif objects:
-            self.current_object_id = objects[0].id
+            first_id = int(objects[0].id)
+            self.sidebar.select_object(first_id)
+            self.current_object_id = first_id
 
     def _refresh_cameras(self) -> None:
         cameras = self.repo.list_cameras(
@@ -1222,16 +1231,13 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _on_import_completed(
-        self, created: int, updated: int, focus_object_name: object = None,
+        self, created: int, updated: int, focus_object_id: object = None,
     ) -> None:
-        name = focus_object_name if isinstance(focus_object_name, str) else None
-        prefer_id: int | None = None
-        if name and name.strip():
-            key = name.strip().casefold()
-            for o in self.repo.list_objects():
-                if (o.name or "").strip().casefold() == key:
-                    prefer_id = int(o.id)
-                    break
+        prefer_id = (
+            int(focus_object_id)
+            if isinstance(focus_object_id, int)
+            else None
+        )
         self._refresh_objects(prefer_object_id=prefer_id)
         self._refresh_cameras()
         self._log(f"Импорт завершен. Создано={created}, обновлено={updated}")

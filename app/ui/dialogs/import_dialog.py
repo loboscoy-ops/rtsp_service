@@ -442,13 +442,13 @@ class ImportDialog(QDialog):
 
     def _on_import_done(self, result_obj: object) -> None:
         self._set_busy(False)
-        created, updated, focus_name = result_obj  # type: ignore[misc]
+        created, updated, focus_id = result_obj  # type: ignore[misc]
         QMessageBox.information(
             self,
             "Импорт завершен",
             f"Создано: {created}\nОбновлено: {updated}",
         )
-        self.import_completed.emit(created, updated, focus_name)
+        self.import_completed.emit(created, updated, focus_id)
         self.accept()
 
     def _on_job_error(self, text: str) -> None:
