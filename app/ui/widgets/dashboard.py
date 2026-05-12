@@ -1,18 +1,14 @@
-"""Дашборд: тёмная карта + список «Площадки» с пончик-диаграммами.
+"""Дашборд: светлая карта (по площадкам) + список «Площадки» с пончиками.
 
-Дизайн повторяет утверждённый мокап:
-  - слева большая карта (CARTO dark) с маркерами/кластерами,
-  - справа скроллящийся список карточек объектов с цветной полоской
-    слева, названием/адресом, пончик-диаграммой online/offline и
-    счётчиком камер.
+Маркеры на карте — по одной точке на объект, в кружке количество камер.
+Клик по маркеру или карточке открывает таблицу нужного объекта.
 """
 from __future__ import annotations
 
-import math
 from typing import Iterable
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -55,15 +51,24 @@ def _ratio_color(online: int, offline: int, unknown: int) -> str:
     return PING_BLOCKED_COLOR
 
 
-class _Donut(QWidget):
-    """Круговая диаграмма online/offline/unknown с числовой подписью внутри."""
+def _object_uin(cameras: Iterable[CameraModel]) -> str:
+    for c in cameras:
+        if (c.uin or "").strip():
+            return c.uin.strip()
+    return ""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+
+class _Donut(QWidget):
+    """Круговая диаграмма online/offline/unknown с центральной подписью."""
+
+    def __init__(self, size: int = 52, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._online = 0
         self._offline = 0
         self._unknown = 0
-        self.setFixedSize(72, 72)
+        self._size = size
+        self._pen_w = max(5, size // 9)
+        self.setFixedSize(size, size)
 
     def set_values(self, online: int, offline: int, unknown: int) -> None:
         self._online = max(0, online)
@@ -78,14 +83,13 @@ class _Donut(QWidget):
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             pen_track = QPen(QColor(_DONUT_TRACK))
-            pen_track.setWidth(8)
+            pen_track.setWidth(self._pen_w)
             pen_track.setCapStyle(Qt.PenCapStyle.FlatCap)
             painter.setPen(pen_track)
             painter.drawArc(rect, 0, 360 * 16)
 
             if total > 0:
-                # Углы Qt: 1/16 градуса; 0° — справа, идём против часовой.
-                start = 90 * 16  # стартуем сверху
+                start = 90 * 16
                 segments = (
                     (self._online, STATUS_ONLINE_FG),
                     (self._unknown, PING_BLOCKED_COLOR),
@@ -96,7 +100,7 @@ class _Donut(QWidget):
                         continue
                     span = -int(round(360 * 16 * value / total))
                     pen = QPen(QColor(color))
-                    pen.setWidth(8)
+                    pen.setWidth(self._pen_w)
                     pen.setCapStyle(Qt.PenCapStyle.FlatCap)
                     painter.setPen(pen)
                     painter.drawArc(rect, start, span)
@@ -105,7 +109,7 @@ class _Donut(QWidget):
             painter.setPen(QColor(THEME_FG))
             font = painter.font()
             font.setBold(True)
-            font.setPointSize(10)
+            font.setPointSize(8 if self._size <= 56 else 10)
             painter.setFont(font)
             if total == 0:
                 text = "—"
@@ -121,7 +125,7 @@ class _Donut(QWidget):
 
 
 class _SiteCard(QFrame):
-    """Карточка одного объекта со светящейся боковой полоской и пончиком."""
+    """Карточка одной площадки: имя + УИН + пончик + счётчик камер."""
 
     clicked = Signal(int)
 
@@ -129,17 +133,19 @@ class _SiteCard(QFrame):
         super().__init__()
         self.setObjectName("SiteCard")
         self._object_id = int(obj.id)
+
         online = sum(1 for c in cameras_for_obj if c.status == "online")
         offline = sum(1 for c in cameras_for_obj if c.status == "offline")
         unknown = len(cameras_for_obj) - online - offline
         accent = _ratio_color(online, offline, unknown)
+        uin = _object_uin(cameras_for_obj)
 
         self.setStyleSheet(
             "QFrame#SiteCard {"
             f" background-color: {_CARD_BG};"
             f" border: 1px solid {_CARD_BORDER};"
-            f" border-left: 4px solid {accent};"
-            " border-radius: 10px;"
+            f" border-left: 3px solid {accent};"
+            " border-radius: 8px;"
             "}"
             "QFrame#SiteCard:hover {"
             f" background-color: {THEME_BG_INPUT};"
@@ -147,33 +153,32 @@ class _SiteCard(QFrame):
         )
 
         outer = QHBoxLayout(self)
-        outer.setContentsMargins(14, 12, 14, 12)
-        outer.setSpacing(12)
+        outer.setContentsMargins(10, 8, 10, 8)
+        outer.setSpacing(8)
 
         text_col = QVBoxLayout()
-        text_col.setSpacing(2)
+        text_col.setSpacing(1)
         text_col.setContentsMargins(0, 0, 0, 0)
         name = QLabel(obj.name or "Объект")
         name.setStyleSheet(
-            f"color: {THEME_FG}; font-size: 14px; font-weight: 700;"
+            f"color: {THEME_FG}; font-size: 12px; font-weight: 700;"
         )
-        addr = QLabel(self._fake_address(obj.name))
-        addr.setStyleSheet(f"color: {THEME_FG_MUTED}; font-size: 11px;")
-        addr.setWordWrap(True)
+        name.setWordWrap(True)
+        uin_label = QLabel(f"УИН: {uin}" if uin else "УИН: —")
+        uin_label.setStyleSheet(f"color: {THEME_FG_MUTED}; font-size: 10px;")
         text_col.addWidget(name)
-        text_col.addWidget(addr)
+        text_col.addWidget(uin_label)
         text_col.addStretch(1)
-
         outer.addLayout(text_col, 1)
 
         donut_col = QVBoxLayout()
-        donut_col.setSpacing(2)
+        donut_col.setSpacing(1)
         donut_col.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        donut = _Donut()
+        donut = _Donut(size=52)
         donut.set_values(online, offline, unknown)
         donut_col.addWidget(donut, 0, Qt.AlignmentFlag.AlignHCenter)
         cams_lab = QLabel(f"Камер  {len(cameras_for_obj)}")
-        cams_lab.setStyleSheet(f"color: {THEME_FG_MUTED}; font-size: 11px;")
+        cams_lab.setStyleSheet(f"color: {THEME_FG_MUTED}; font-size: 10px;")
         cams_lab.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         donut_col.addWidget(cams_lab)
         outer.addLayout(donut_col)
@@ -186,14 +191,9 @@ class _SiteCard(QFrame):
             self.clicked.emit(self._object_id)
         super().mouseReleaseEvent(event)
 
-    @staticmethod
-    def _fake_address(name: str) -> str:
-        # У нас в БД сейчас нет адреса — показываем понятный фолбэк.
-        return name or ""
-
 
 class DashboardView(QWidget):
-    """Главный виджет дашборда."""
+    """Главный виджет дашборда: карта + список площадок."""
 
     object_selected = Signal(int)
 
@@ -207,12 +207,12 @@ class DashboardView(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # --- карта слева
+        # --- карта слева (светлая, маркеры по площадкам)
         map_wrap = QFrame()
         map_wrap.setStyleSheet(f"QFrame {{ background-color: {THEME_BG_WINDOW}; }}")
         map_layout = QVBoxLayout(map_wrap)
         map_layout.setContentsMargins(0, 0, 0, 0)
-        self.map_view = CameraMapView(self, dark=True)
+        self.map_view = CameraMapView(self, dark=False)
         map_layout.addWidget(self.map_view)
         root.addWidget(map_wrap, 2)
 
@@ -225,15 +225,15 @@ class DashboardView(QWidget):
             f" border-left: 1px solid {THEME_BORDER};"
             "}"
         )
-        side.setFixedWidth(360)
+        side.setFixedWidth(300)
 
         side_layout = QVBoxLayout(side)
-        side_layout.setContentsMargins(16, 14, 16, 14)
-        side_layout.setSpacing(10)
+        side_layout.setContentsMargins(12, 10, 12, 10)
+        side_layout.setSpacing(8)
 
         title = QLabel("Площадки")
         title.setStyleSheet(
-            f"color: {THEME_FG}; font-size: 18px; font-weight: 700; padding-left: 2px;"
+            f"color: {THEME_FG}; font-size: 16px; font-weight: 700; padding-left: 2px;"
         )
         side_layout.addWidget(title)
 
@@ -247,7 +247,7 @@ class DashboardView(QWidget):
         self._cards_host.setStyleSheet("background: transparent;")
         self._cards_layout = QVBoxLayout(self._cards_host)
         self._cards_layout.setContentsMargins(0, 0, 0, 0)
-        self._cards_layout.setSpacing(10)
+        self._cards_layout.setSpacing(8)
         self._cards_layout.addStretch(1)
         scroll.setWidget(self._cards_host)
 
@@ -262,7 +262,7 @@ class DashboardView(QWidget):
         except Exception:
             return
 
-        self.map_view.set_cameras(cameras)
+        self.map_view.set_objects(objects, cameras)
         self._rebuild_cards(objects, cameras)
 
     def _rebuild_cards(
@@ -270,7 +270,6 @@ class DashboardView(QWidget):
         objects: Iterable[ObjectModel],
         cameras: Iterable[CameraModel],
     ) -> None:
-        # Сносим старые карточки (хвостовой stretch не трогаем).
         while self._cards_layout.count() > 1:
             item = self._cards_layout.takeAt(0)
             w = item.widget() if item else None

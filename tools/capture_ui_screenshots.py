@@ -81,15 +81,14 @@ def main() -> int:
 
     # Расширенный демо-набор объектов и камер для дашборда.
     demo_sites = [
-        ("Криворожская", "55.8990, 37.4290", "online"),
-        ("Циолковского", "55.9120, 37.8270", "offline"),
-        ("Форсайт", "55.6740, 37.2710", "online"),
-        ("Руновский", "55.4350, 37.5520", "unknown"),
-        ("Домодедовская", "55.4080, 37.7530", "online"),
-        ("Балашиха", "55.7960, 37.9380", "offline"),
+        ("ЖК Диус", "U-DIUS-001", "55.8990, 37.4290", "online"),
+        ("ЖК УЛИЦА АКАДЕМИКА ФРАНКА", "U-FRAN-014", "55.7522, 37.4733", "online"),
+        ("ТРК Эс Ай Эс", "U-SIS-021", "55.6740, 37.2710", "online"),
+        ("Школа Эс Ай Эс", "U-SIS-022", "55.4080, 37.7530", "online"),
+        ("Циолковского", "U-COSM-009", "55.9120, 37.8270", "offline"),
+        ("Балашиха", "U-BAL-033", "55.7960, 37.9380", "offline"),
     ]
-    for idx, (site_name, coords, status) in enumerate(demo_sites, start=1):
-        oid = repo.get_or_create_object(site_name)
+    for idx, (site_name, uin, coords, status) in enumerate(demo_sites, start=1):
         for cam_idx in range(1, 4 if idx % 2 else 3):
             cam_id, _ = repo.upsert_camera_for_object_name(
                 object_name=site_name,
@@ -99,6 +98,7 @@ def main() -> int:
                 rtsp_url=f"rtsp://demo:demo@10.0.{idx}.{cam_idx}/stream",
                 enabled=True,
                 gps_coords=coords,
+                uin=uin,
             )
             override = status if cam_idx == 1 else "online"
             repo.update_camera_status(

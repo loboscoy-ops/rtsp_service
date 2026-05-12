@@ -202,6 +202,9 @@ class MainWindow(QMainWindow):
         stack.addWidget(self._build_central_splitter())
         self.dashboard = DashboardView(self.repo)
         self.dashboard.object_selected.connect(self._on_dashboard_object_selected)
+        self.dashboard.map_view.open_object_requested.connect(
+            self._on_dashboard_object_selected
+        )
         self.dashboard.map_view.open_camera_requested.connect(self._open_camera_stream)
         stack.addWidget(self.dashboard)
         self._view_stack = stack

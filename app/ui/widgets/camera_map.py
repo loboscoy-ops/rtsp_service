@@ -10,7 +10,7 @@ from PySide6.QtCore import QUrl, Signal
 from PySide6.QtWidgets import QLabel, QStackedWidget, QTextBrowser, QVBoxLayout, QWidget
 
 if TYPE_CHECKING:
-    from app.database.models import CameraModel
+    from app.database.models import CameraModel, ObjectModel
 
 # WebEngine-импорт максимально устойчив: на разных сборках PySide6/macOS
 # может падать не только ImportError, но и OSError/RuntimeError.
@@ -28,15 +28,16 @@ except Exception:
 _log = logging.getLogger(__name__)
 
 
-# Кастомная схема, которой мы помечаем «открой камеру id=N».
-# Перехватывается в MapPage.acceptNavigationRequest, поэтому браузер
-# никуда не уходит — мы только эмитим сигнал в Python.
+# Кастомная схема для коммуникации Leaflet → Python:
+#   rtsp-app://open/<camera_id>    — попросить открыть стрим камеры
+#   rtsp-app://object/<object_id>  — попросить перейти к объекту в таблице
 OPEN_SCHEME = "rtsp-app"
 OPEN_HOST = "open"
+OBJECT_HOST = "object"
 
 
 def markers_payload(cameras: list["CameraModel"]) -> list[dict]:
-    """Список словарей с координатами/статусами для отрисовки на карте."""
+    """Маркеры по камерам (для основного раздела «Карта»)."""
     from app.utils.gps_parse import parse_lat_lon
 
     out: list[dict] = []
@@ -47,6 +48,7 @@ def markers_payload(cameras: list["CameraModel"]) -> list[dict]:
         lat, lon = ll
         out.append(
             {
+                "kind": "camera",
                 "id": int(cam.id),
                 "num": idx,
                 "lat": lat,
@@ -54,6 +56,69 @@ def markers_payload(cameras: list["CameraModel"]) -> list[dict]:
                 "name": cam.camera_name or "",
                 "status": cam.status or "unknown",
                 "object": cam.object_name or "",
+            }
+        )
+    return out
+
+
+def markers_payload_objects(
+    objects: list["ObjectModel"],
+    cameras: list["CameraModel"],
+) -> list[dict]:
+    """Маркеры по объектам: один маркер на площадку, в кружке — кол-во камер.
+
+    Координаты площадки = координаты первой камеры с валидным GPS.
+    Статус площадки = «online», если все камеры online; «offline», если
+    среди offline их большинство; иначе «unknown».
+    УИН площадки = первый непустой UIN среди её камер.
+    """
+    from app.utils.gps_parse import parse_lat_lon
+
+    by_object: dict[int, list["CameraModel"]] = {}
+    for c in cameras:
+        by_object.setdefault(int(c.object_id), []).append(c)
+
+    out: list[dict] = []
+    for obj in objects:
+        cams = by_object.get(int(obj.id), [])
+        coords: tuple[float, float] | None = None
+        for c in cams:
+            ll = parse_lat_lon(c.gps_coords)
+            if ll is not None:
+                coords = ll
+                break
+        if coords is None:
+            continue
+
+        online = sum(1 for c in cams if c.status == "online")
+        offline = sum(1 for c in cams if c.status == "offline")
+        unknown = len(cams) - online - offline
+        if offline == 0 and unknown == 0:
+            status = "online"
+        elif offline >= max(online, unknown):
+            status = "offline"
+        else:
+            status = "unknown"
+
+        uin = ""
+        for c in cams:
+            if (c.uin or "").strip():
+                uin = c.uin.strip()
+                break
+
+        out.append(
+            {
+                "kind": "object",
+                "id": int(obj.id),
+                "num": len(cams),
+                "lat": coords[0],
+                "lon": coords[1],
+                "name": obj.name or "",
+                "uin": uin,
+                "status": status,
+                "online": online,
+                "offline": offline,
+                "unknown": unknown,
             }
         )
     return out
@@ -93,6 +158,7 @@ def leaflet_html(markers: list[dict], *, dark: bool = False) -> str:
     markers_json = json.dumps(markers, ensure_ascii=False)
     markers_json = markers_json.replace("<", "\\u003c")
     open_link = f"{OPEN_SCHEME}://{OPEN_HOST}/"
+    object_link = f"{OPEN_SCHEME}://{OBJECT_HOST}/"
 
     if dark:
         body_bg = "#12141a"
@@ -138,6 +204,7 @@ html, body, #map {{ height: 100%; margin: 0; padding: 0; background: {body_bg}; 
 .cam-online {{ background: #2d9d5f; }}
 .cam-offline {{ background: #c43c3c; }}
 .cam-unknown {{ background: #6b7280; }}
+.cam-object {{ font-size: 13px; box-shadow: 0 2px 6px rgba(0,0,0,.35); }}
 .cam-popup .leaflet-popup-content-wrapper {{
   background: {popup_bg};
   color: {popup_fg};
@@ -172,6 +239,9 @@ function escHtml(s) {{
 function openLink(id) {{
   return {json.dumps(open_link)} + encodeURIComponent(id);
 }}
+function objectLink(id) {{
+  return {json.dumps(object_link)} + encodeURIComponent(id);
+}}
 function statusClass(s) {{
   if (s === 'online') return 'cam-online';
   if (s === 'offline') return 'cam-offline';
@@ -192,36 +262,57 @@ L.tileLayer('{tile_url}', {{
 const markerById = {{}};
 const featureGroup = L.featureGroup().addTo(map);
 
-function buildIcon(num, status) {{
+function buildIcon(num, status, kind) {{
+  const size = (kind === 'object') ? 36 : 26;
+  const inner = (kind === 'object') ? 32 : 22;
+  const cls = (kind === 'object') ? 'cam-num cam-object' : 'cam-num';
+  const tip = (kind === 'object')
+    ? 'Площадка: ' + num + ' камер'
+    : 'Клик: попап. Двойной клик: открыть в ffplay';
   return L.divIcon({{
     className: '',
-    html: '<div class="cam-num ' + statusClass(status)
-        + '" title="Клик: попап. Двойной клик: открыть в ffplay">' + num + '</div>',
-    iconSize: [26, 26],
-    iconAnchor: [13, 13]
+    html: '<div class="' + cls + ' ' + statusClass(status)
+        + '" style="width:' + size + 'px;height:' + size + 'px;line-height:'
+        + inner + 'px;" title="' + tip + '">' + num + '</div>',
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2]
   }});
 }}
 
 function buildPopup(m) {{
+  if (m.kind === 'object') {{
+    const uin = m.uin
+      ? '<small>УИН: ' + escHtml(m.uin) + '</small><br/>'
+      : '<small style="color:#9aa1ab;">УИН не указан</small><br/>';
+    return '<div class="cam-popup">'
+         + '<b>' + escHtml(m.name) + '</b><br/>'
+         + uin
+         + '<small>Камер: ' + m.num + '</small><br/>'
+         + '<a class="open-link" href="' + objectLink(m.id) + '">'
+         + '\u270D Перейти в таблицу объекта</a>'
+         + '</div>';
+  }}
   return '<div class="cam-popup">'
        + '<b>№' + m.num + '</b> — ' + escHtml(m.name) + '<br/>'
        + escHtml(m.object) + '<br/>'
        + '<small>' + escHtml(m.status) + '</small><br/>'
-       + '<a class="open-link" href="' + openLink(m.id) + '">▶ Открыть в ffplay</a>'
+       + '<a class="open-link" href="' + openLink(m.id) + '">\u25B6 Открыть в ffplay</a>'
        + '<span class="hint">Двойной клик по маркеру — то же самое</span>'
        + '</div>';
 }}
 
 function addMarker(m) {{
   const marker = L.marker([m.lat, m.lon], {{
-    icon: buildIcon(m.num, m.status),
-    title: '№' + m.num + ' — ' + m.name
+    icon: buildIcon(m.num, m.status, m.kind),
+    title: (m.kind === 'object')
+      ? m.name + ' — камер: ' + m.num
+      : '№' + m.num + ' — ' + m.name
   }});
   marker._meta = m;
   marker.bindPopup(buildPopup(m), {{ className: 'cam-popup' }});
   marker.on('dblclick', function (ev) {{
     L.DomEvent.stopPropagation(ev);
-    window.location.href = openLink(m.id);
+    window.location.href = (m.kind === 'object') ? objectLink(m.id) : openLink(m.id);
   }});
   marker.addTo(featureGroup);
   markerById[m.id] = marker;
@@ -243,7 +334,7 @@ window.updateCameraStatus = function (id, status) {{
   const marker = markerById[id];
   if (!marker) return;
   marker._meta.status = status;
-  marker.setIcon(buildIcon(marker._meta.num, status));
+  marker.setIcon(buildIcon(marker._meta.num, status, marker._meta.kind));
   marker.setPopupContent(buildPopup(marker._meta));
 }};
 
@@ -259,19 +350,25 @@ window.fitAllMarkers();
 if _WEBENGINE and QWebEnginePage is not None:
 
     class MapPage(QWebEnginePage):  # type: ignore[misc]
-        """Перехватывает переходы на rtsp-app://open/<id> и эмитит сигнал в Python."""
+        """Перехватывает rtsp-app:// и роутит:
+        rtsp-app://open/<cam_id>     → camera_open_requested(cam_id)
+        rtsp-app://object/<obj_id>   → object_open_requested(obj_id)
+        """
 
         camera_open_requested = Signal(int)
+        object_open_requested = Signal(int)
 
         def acceptNavigationRequest(self, url: QUrl, _type, _is_main_frame) -> bool:  # noqa: D401
             if url.scheme() == OPEN_SCHEME:
-                # Берём последний непустой сегмент пути — это id камеры.
                 raw = (url.path() or "").strip("/").split("/")[-1]
                 try:
-                    cam_id = int(raw)
+                    target_id = int(raw)
                 except (TypeError, ValueError):
                     return False
-                self.camera_open_requested.emit(cam_id)
+                if url.host() == OBJECT_HOST:
+                    self.object_open_requested.emit(target_id)
+                else:
+                    self.camera_open_requested.emit(target_id)
                 return False
             return super().acceptNavigationRequest(url, _type, _is_main_frame)
 else:
@@ -296,13 +393,20 @@ def _fingerprint(cameras: list["CameraModel"]) -> tuple:
 
 
 class CameraMapView(QWidget):
-    """Встраиваемая карта камер с тем же UX, что и :class:`MapDialog`.
+    """Встраиваемая карта.
+
+    Поддерживает два набора маркеров:
+      * `set_cameras(...)` — по одной точке на камеру (раздел «Камеры»);
+      * `set_objects(...)` — по одной точке на площадку, в кружке —
+        количество камер (раздел «Дашборд»).
 
     Сигналы:
       open_camera_requested(int) — пользователь хочет открыть стрим камеры.
+      open_object_requested(int) — пользователь хочет перейти к площадке.
     """
 
     open_camera_requested = Signal(int)
+    open_object_requested = Signal(int)
 
     def __init__(self, parent: Optional[QWidget] = None, *, dark: bool = False):
         super().__init__(parent)
@@ -318,6 +422,7 @@ class CameraMapView(QWidget):
         self._pending_status_updates: list[tuple[int, str]] = []
         self._last_fingerprint: tuple = ()
         self._known_ids: set[int] = set()
+        self._mode: str = "cameras"  # "cameras" | "objects"
 
         self._info_label = QLabel("Нет камер с распознаваемыми координатами.")
         self._info_label.setWordWrap(True)
@@ -327,6 +432,7 @@ class CameraMapView(QWidget):
             self._view = QWebEngineView(self)
             self._page = MapPage(self._view)
             self._page.camera_open_requested.connect(self.open_camera_requested)
+            self._page.object_open_requested.connect(self.open_object_requested)
             self._view.setPage(self._page)
             self._view.loadFinished.connect(self._on_load_finished)
             self._stack.addWidget(self._view)
@@ -346,28 +452,62 @@ class CameraMapView(QWidget):
     # ------------------------------------------------------------------
 
     def set_cameras(self, cameras: list["CameraModel"]) -> None:
-        """Полное обновление набора камер.
+        """Полное обновление набора камер (раздел «Карта»).
 
         Если поменялся только статус (структура списка не изменилась),
         точечно патчим иконки — зум/панорама сохраняются.
         """
         markers = markers_payload(cameras)
-        new_fp = _fingerprint(cameras)
+        new_fp = ("cameras", _fingerprint(cameras))
 
-        if new_fp == self._last_fingerprint and self._known_ids:
+        if (
+            self._mode == "cameras"
+            and new_fp == self._last_fingerprint
+            and self._known_ids
+        ):
             for m in markers:
                 self.update_camera_status(m["id"], m["status"])
             return
 
+        self._mode = "cameras"
         self._last_fingerprint = new_fp
         self._known_ids = {m["id"] for m in markers}
+        self._render(markers, total=len(cameras))
 
+    def set_objects(
+        self,
+        objects: list["ObjectModel"],
+        cameras: list["CameraModel"],
+    ) -> None:
+        """Маркеры по площадкам (раздел «Дашборд»)."""
+        markers = markers_payload_objects(objects, cameras)
+        new_fp = (
+            "objects",
+            tuple(
+                (m["id"], m["lat"], m["lon"], m["num"], m["name"], m.get("uin", ""))
+                for m in markers
+            ),
+        )
+        if (
+            self._mode == "objects"
+            and new_fp == self._last_fingerprint
+            and self._known_ids
+        ):
+            for m in markers:
+                self.update_camera_status(m["id"], m["status"])
+            return
+
+        self._mode = "objects"
+        self._last_fingerprint = new_fp
+        self._known_ids = {m["id"] for m in markers}
+        self._render(markers, total=len(objects))
+
+    def _render(self, markers: list[dict], *, total: int) -> None:
         if not markers:
-            skipped = len(cameras)
             self._info_label.setText(
-                "Нет камер с распознаваемыми координатами"
-                + (f" (всего камер: {skipped})." if skipped else ".")
-                + "\nФормат: широта, долгота (например 55.7522, 37.6156)."
+                "Нет точек с распознаваемыми координатами"
+                + (f" (всего: {total})." if total else ".")
+                + "\nФормат GPS: широта, долгота (например 55.7522, 37.6156)."
             )
             self._stack.setCurrentWidget(self._info_label)
             self._loaded = False
@@ -375,8 +515,7 @@ class CameraMapView(QWidget):
             return
 
         if self._view is None:
-            # Фолбэк без WebEngine.
-            skipped = len(cameras) - len(markers)
+            skipped = max(0, total - len(markers))
             if hasattr(self, "_fallback"):
                 self._fallback.setHtml(fallback_html(markers, skipped))
                 self._stack.setCurrentWidget(self._fallback)
@@ -411,15 +550,17 @@ class CameraMapView(QWidget):
 
     def prepare_shutdown(self) -> None:
         """Уменьшить краши Qt WebEngine при закрытии главного окна."""
-        try:
-            self.open_camera_requested.disconnect()
-        except TypeError:
-            pass
-        if self._page is not None:
+        for sig in (self.open_camera_requested, self.open_object_requested):
             try:
-                self._page.camera_open_requested.disconnect()
-            except TypeError:
+                sig.disconnect()
+            except (RuntimeError, TypeError):
                 pass
+        if self._page is not None:
+            for sig_name in ("camera_open_requested", "object_open_requested"):
+                try:
+                    getattr(self._page, sig_name).disconnect()
+                except (RuntimeError, TypeError, AttributeError):
+                    pass
         if self._view is None:
             self._loaded = False
             return
