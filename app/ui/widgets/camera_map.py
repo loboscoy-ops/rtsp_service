@@ -65,9 +65,31 @@ def _jitter_duplicate_marker_positions(markers: list[dict]) -> None:
             m["lon"] = base_lon + radius_deg * math.cos(ang)
 
 
-def markers_payload(cameras: list["CameraModel"]) -> list[dict]:
-    """Маркеры по камерам (для основного раздела «Карта» и дашборда)."""
+def markers_payload(
+    cameras: list["CameraModel"],
+    *,
+    row_number_scope: str = "global",
+) -> list[dict]:
+    """Маркеры по камерам (раздел «Камеры», дашборд, диалог карты).
+
+    ``row_number_scope``:
+      - ``global`` — номер как позиция в переданном списке (для отфильтрованной
+        таблицы совпадает с колонкой «№»);
+      - ``per_object`` — номер внутри объекта 1…N в порядке следования камер
+        в ``cameras`` (при списке из ``Repository.list_cameras()`` это тот же
+        порядок, что и у таблицы: объект по имени, камера по имени).
+    """
     from app.utils.gps_parse import parse_lat_lon
+
+    num_by_cam_id: dict[int, int] | None = None
+    if row_number_scope == "per_object":
+        by_obj: dict[int, list["CameraModel"]] = defaultdict(list)
+        for cam in cameras:
+            by_obj[int(cam.object_id)].append(cam)
+        num_by_cam_id = {}
+        for group in by_obj.values():
+            for i, cam in enumerate(group, start=1):
+                num_by_cam_id[int(cam.id)] = i
 
     out: list[dict] = []
     for idx, cam in enumerate(cameras, start=1):
@@ -75,12 +97,13 @@ def markers_payload(cameras: list["CameraModel"]) -> list[dict]:
         if ll is None:
             continue
         lat, lon = ll
+        display_num = num_by_cam_id[int(cam.id)] if num_by_cam_id else idx
         out.append(
             {
                 "kind": "camera",
                 "id": int(cam.id),
                 "object_id": int(cam.object_id),
-                "num": idx,
+                "num": display_num,
                 "lat": lat,
                 "lon": lon,
                 "name": cam.camera_name or "",
@@ -708,6 +731,7 @@ class CameraMapView(QWidget):
         dark: bool = False,
         cluster: bool = False,
         dashboard_hover: bool = False,
+        per_object_marker_numbers: bool = False,
     ):
         super().__init__(parent)
         self._dark = dark
@@ -718,6 +742,8 @@ class CameraMapView(QWidget):
         self._cluster = cluster
         # Плашка при наведении на дашборде — только объект и УИН.
         self._dashboard_hover = dashboard_hover
+        # На дашборде номера на маркерах — как в таблице внутри объекта (1…N).
+        self._per_object_marker_numbers = per_object_marker_numbers
         self._map_html_generation = 0
         self._stack = QStackedWidget(self)
         layout = QVBoxLayout(self)
@@ -765,8 +791,9 @@ class CameraMapView(QWidget):
         Если поменялся только статус (структура списка не изменилась),
         точечно патчим иконки — зум/панорама сохраняются.
         """
-        markers = markers_payload(cameras)
-        new_fp = ("cameras", _fingerprint(cameras))
+        scope = "per_object" if self._per_object_marker_numbers else "global"
+        markers = markers_payload(cameras, row_number_scope=scope)
+        new_fp = ("cameras", scope, _fingerprint(cameras))
 
         if (
             self._mode == "cameras"

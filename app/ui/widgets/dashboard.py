@@ -253,6 +253,7 @@ class DashboardView(QWidget):
             dark=False,
             cluster=True,
             dashboard_hover=True,
+            per_object_marker_numbers=True,
         )
         map_layout.addWidget(self.map_view)
         root.addWidget(map_wrap, 2)
