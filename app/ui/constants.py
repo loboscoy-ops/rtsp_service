@@ -103,6 +103,22 @@ QToolBar QPushButton:disabled {{
   color: {THEME_FG_MUTED};
   background-color: {THEME_BG_PANEL};
 }}
+QToolBar QPushButton#ViewSwitch {{
+  background-color: transparent;
+  border: 1px solid {THEME_BORDER};
+  color: {THEME_FG_MUTED};
+  font-weight: 600;
+  padding: 6px 16px;
+}}
+QToolBar QPushButton#ViewSwitch:hover {{
+  color: {THEME_FG};
+  border-color: {THEME_ACCENT};
+}}
+QToolBar QPushButton#ViewSwitch:checked {{
+  background-color: rgba(61, 139, 253, 0.18);
+  border-color: {THEME_ACCENT};
+  color: {THEME_FG};
+}}
 QToolBar QLabel {{
   color: {THEME_FG_MUTED};
   background: transparent;

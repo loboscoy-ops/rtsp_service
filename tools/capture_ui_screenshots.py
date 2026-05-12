@@ -141,6 +141,12 @@ def main() -> int:
         if win.statusBar():
             _save_grab(win.statusBar(), out / "07-statusnaya-stroka.png")
 
+        win.dashboard_view_btn.click()
+        QApplication.processEvents()
+        _save_grab(win, out / "11-dashboard.png")
+        win.cameras_view_btn.click()
+        QApplication.processEvents()
+
         # Диалоги (по одному кадру каждый).
         od = ObjectDialog(win, initial_name="Новый объект")
         od.show()

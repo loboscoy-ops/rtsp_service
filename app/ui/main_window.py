@@ -8,9 +8,10 @@ from datetime import datetime
 from typing import Callable, Optional
 
 from PySide6.QtCore import Qt, QThreadPool, QTimer
-from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import QColor, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QComboBox,
     QInputDialog,
     QLabel,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSplitter,
+    QStackedWidget,
     QStatusBar,
     QTextEdit,
     QToolBar,
@@ -46,6 +48,7 @@ from app.ui.constants import (
     SIDEBAR_MIN_WIDTH,
     STATUS_BAR_MESSAGE_MS,
     STATUSBAR_PADDING_PX,
+    THEME_BG_PANEL,
     THREADPOOL_SHUTDOWN_WAIT_MS,
     WINDOW_DEFAULT_SIZE,
 )
@@ -54,6 +57,7 @@ from app.ui.dialogs.import_dialog import ImportDialog
 from app.ui.dialogs.object_dialog import ObjectDialog
 from app.ui.widgets.camera_map import CameraMapView
 from app.ui.widgets.camera_table import CameraTable
+from app.ui.widgets.dashboard import DashboardView
 from app.ui.widgets.object_sidebar import ObjectSidebar
 from app.utils.process_utils import terminate_ffprobe_children
 from app.utils.validators import mask_rtsp_url
@@ -112,7 +116,7 @@ class MainWindow(QMainWindow):
 
     def _setup_ui(self) -> None:
         self._build_toolbar()
-        self.setCentralWidget(self._build_central_splitter())
+        self.setCentralWidget(self._build_central_stack())
         self.setStatusBar(QStatusBar())
         self._setup_logo()
 
@@ -120,6 +124,19 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar("Main")
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
+
+        self.cameras_view_btn = self._add_view_button(
+            toolbar, "Камеры", checked=True, slot=lambda: self._switch_view(0)
+        )
+        self.dashboard_view_btn = self._add_view_button(
+            toolbar, "Дашборд", checked=False, slot=lambda: self._switch_view(1)
+        )
+        self._view_group = QButtonGroup(self)
+        self._view_group.setExclusive(True)
+        self._view_group.addButton(self.cameras_view_btn, 0)
+        self._view_group.addButton(self.dashboard_view_btn, 1)
+
+        toolbar.addSeparator()
 
         self.add_object_btn = self._add_toolbar_button(
             toolbar, "Добавить объект", self._add_object
@@ -163,6 +180,37 @@ class MainWindow(QMainWindow):
         btn.clicked.connect(slot)
         toolbar.addWidget(btn)
         return btn
+
+    @staticmethod
+    def _add_view_button(
+        toolbar: QToolBar,
+        label: str,
+        *,
+        checked: bool,
+        slot: Callable[[], None],
+    ) -> QPushButton:
+        btn = QPushButton(label)
+        btn.setCheckable(True)
+        btn.setChecked(checked)
+        btn.setObjectName("ViewSwitch")
+        btn.clicked.connect(slot)
+        toolbar.addWidget(btn)
+        return btn
+
+    def _build_central_stack(self) -> QStackedWidget:
+        stack = QStackedWidget()
+        stack.addWidget(self._build_central_splitter())
+        self.dashboard = DashboardView(self.repo)
+        stack.addWidget(self.dashboard)
+        self._view_stack = stack
+        return stack
+
+    def _switch_view(self, index: int) -> None:
+        if not hasattr(self, "_view_stack"):
+            return
+        self._view_stack.setCurrentIndex(index)
+        if index == 1:
+            self.dashboard.refresh()
 
     def _build_central_splitter(self) -> QSplitter:
         splitter = QSplitter()
@@ -244,14 +292,33 @@ class MainWindow(QMainWindow):
         if pix.isNull():
             return
         pix = pix.scaledToHeight(LOGO_HEIGHT_PX, Qt.TransformationMode.SmoothTransformation)
+        pix = self._composite_on_theme(pix)
         self.logo_label = QLabel()
         self.logo_label.setPixmap(pix)
         self.logo_label.setToolTip("УРУС")
         self.logo_label.setContentsMargins(8, 0, 8, 0)
         self.logo_label.setFixedHeight(LOGO_HEIGHT_PX)
+        self.logo_label.setStyleSheet(
+            f"background-color: {THEME_BG_PANEL}; border: none;"
+        )
         self.statusBar().setSizeGripEnabled(False)
         self.statusBar().setFixedHeight(LOGO_HEIGHT_PX + STATUSBAR_PADDING_PX)
         self.statusBar().addPermanentWidget(self.logo_label)
+
+    @staticmethod
+    def _composite_on_theme(src: QPixmap) -> QPixmap:
+        """Подложить под лого фон темы — чтобы он не «горел» белым/прозрачным
+        пятном на тёмной строке состояния.
+        """
+        out = QPixmap(src.size())
+        out.fill(QColor(THEME_BG_PANEL))
+        painter = QPainter(out)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            painter.drawPixmap(0, 0, src)
+        finally:
+            painter.end()
+        return out
 
     # ==================================================================
     # signals / shortcuts
@@ -384,6 +451,8 @@ class MainWindow(QMainWindow):
             return
         self._refresh_objects()
         self._refresh_cameras()
+        if hasattr(self, "dashboard") and self._view_stack.currentIndex() == 1:
+            self.dashboard.refresh()
 
     # ==================================================================
     # sorting
