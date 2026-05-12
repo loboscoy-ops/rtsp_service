@@ -110,9 +110,10 @@ class Repository:
         if search.strip():
             q = f"%{search.strip()}%"
             where.append(
-                "(c.camera_identifier LIKE ? OR c.camera_name LIKE ? OR c.group_name LIKE ? OR o.name LIKE ?)"
+                "(COALESCE(c.uin,'') LIKE ? OR c.camera_identifier LIKE ? "
+                "OR c.camera_name LIKE ? OR c.group_name LIKE ? OR o.name LIKE ?)"
             )
-            params.extend([q, q, q, q])
+            params.extend([q, q, q, q, q])
         if status_filter in {"online", "offline", "unknown"}:
             where.append("c.status = ?")
             params.append(status_filter)

@@ -138,6 +138,7 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self.setCentralWidget(self._build_central_stack())
         self._restore_splitter_states()
+        self._enforce_cameras_bottom_height_cap()
         # Status bar убран целиком — лог пишется только в системный логгер,
         # лого живёт в правом углу тулбара (см. _build_toolbar).
 
@@ -177,7 +178,9 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Поиск камер: ID, имя, группа, объект")
+        self.search_input.setPlaceholderText(
+            "Поиск: УИН, ID камеры, имя, группа, объект"
+        )
         self.search_input.textChanged.connect(self._refresh_cameras)
         toolbar.addWidget(self.search_input)
 
@@ -288,7 +291,8 @@ class MainWindow(QMainWindow):
         # Вертикальный сплиттер: сверху таблица камер, снизу карта + ошибки.
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(self._build_table_pane())
-        splitter.addWidget(self._build_bottom_pane())
+        self._cameras_bottom_pane = self._build_bottom_pane()
+        splitter.addWidget(self._cameras_bottom_pane)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
         splitter.setSizes(list(CAMERAS_SPLITTER_DEFAULT_SIZES))
@@ -337,14 +341,58 @@ class MainWindow(QMainWindow):
             )
         else:
             row_h = max(table.verticalHeader().defaultSectionSize(), 24)
-        bottom_min = 160
+        max_bottom = self._cameras_bottom_area_max_height()
+        bottom_min = min(160, max_bottom)
         total = sum(sp.sizes())
         if total <= 0:
             total = max(sp.height(), 520)
         want_top = header_h + rows * row_h + 10
         top_h = min(want_top, total - bottom_min)
         top_h = max(top_h, header_h + row_h + 6)
-        sp.setSizes([top_h, total - top_h])
+        bottom_h = total - top_h
+        if bottom_h > max_bottom:
+            bottom_h = max_bottom
+            top_h = total - bottom_h
+        sp.setSizes([top_h, bottom_h])
+
+    def _cameras_bottom_area_max_height(self) -> int:
+        """Максимальная высота нижнего блока (миникарта + ошибки) в разделе «Камеры».
+
+        Не больше трети высоты доступной области экрана, на котором окно показано.
+        """
+        scr = self.screen()
+        if scr is None:
+            scr = QApplication.primaryScreen()
+        if scr is None:
+            return 400
+        return max(120, scr.availableGeometry().height() // 3)
+
+    def _enforce_cameras_bottom_height_cap(self) -> None:
+        if not hasattr(self, "_cameras_splitter") or not hasattr(self, "_cameras_bottom_pane"):
+            return
+        max_bottom = self._cameras_bottom_area_max_height()
+        self._cameras_bottom_pane.setMaximumHeight(max_bottom)
+
+        sp = self._cameras_splitter
+        sizes = sp.sizes()
+        if len(sizes) < 2:
+            return
+        top, bot = sizes[0], sizes[1]
+        total = top + bot
+        if total <= 0:
+            return
+        min_table = 120
+        if bot <= max_bottom:
+            return
+        new_bot = max_bottom
+        new_top = total - new_bot
+        if new_top < min_table:
+            new_top = min(min_table, max(0, total - 80))
+            new_bot = total - new_top
+            if new_bot > max_bottom:
+                new_bot = max_bottom
+                new_top = total - new_bot
+        sp.setSizes([new_top, new_bot])
 
     def _save_splitter_states(self) -> None:
         settings = QSettings()
@@ -1184,6 +1232,14 @@ class MainWindow(QMainWindow):
         cameras = self.repo.list_cameras(object_id=None, search="", status_filter="all")
         enabled = [c for c in cameras if c.enabled]
         self._start_checks(enabled, "Опрос после импорта формы", poll_ui="local")
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._enforce_cameras_bottom_height_cap()
+
+    def moveEvent(self, event) -> None:
+        super().moveEvent(event)
+        self._enforce_cameras_bottom_height_cap()
 
     # ==================================================================
     # close
