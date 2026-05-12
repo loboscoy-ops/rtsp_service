@@ -37,6 +37,9 @@ OPEN_SCHEME = "rtsp-app"
 OPEN_HOST = "open"
 OBJECT_HOST = "object"
 
+# Текст в углу карты вместо кликабельной атрибуции Leaflet/OSM (WebEngine).
+MAP_ATTRIBUTION_LABEL = "Урус - Умные цифровые сервисы"
+
 
 def _jitter_duplicate_marker_positions(markers: list[dict]) -> None:
     """Сдвигаем маркеры с одинаковыми координатами по маленькому кругу.
@@ -244,10 +247,7 @@ def leaflet_html(
         popup_border = "#2d3544"
         hint_fg = "#8b929e"
         tile_url = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-        tile_attr = (
-            "&copy; <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a>"
-            " &copy; <a href=\"https://carto.com/attributions\">CARTO</a>"
-        )
+        tile_attr = MAP_ATTRIBUTION_LABEL
         tile_subdomains = "abcd"
     else:
         body_bg = "#ffffff"
@@ -258,7 +258,7 @@ def leaflet_html(
         popup_border = "#d6d8dc"
         hint_fg = "#6b7280"
         tile_url = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-        tile_attr = "&copy; <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a>"
+        tile_attr = MAP_ATTRIBUTION_LABEL
         tile_subdomains = "abc"
 
     cluster_css = (
@@ -534,10 +534,7 @@ function dashClusterIconCreate(cluster) {{
 
 const markers = {markers_json};
 const map = L.map('map', {{ zoomControl: true }});
-map.attributionControl.setPrefix(
-  '<span aria-hidden="true">\\uD83C\\uDDF7\\uD83C\\uDDFA</span> '
-  + '<a href="https://leafletjs.com" target="_blank">Leaflet</a>'
-);
+map.attributionControl.setPrefix(false);
 L.tileLayer('{tile_url}', {{
   maxZoom: 19,
   subdomains: '{tile_subdomains}',
