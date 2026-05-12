@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 APP_NAME = "Urus Camera Monitor"
-APP_VERSION = "0.1.73"
+APP_VERSION = "0.1.74"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 IS_FROZEN = bool(getattr(sys, "frozen", False))
@@ -79,14 +79,8 @@ REQUIRED_VIDEO_CODECS = frozenset(
     for c in (_raw_codecs.split(",") if _raw_codecs else ["h264"])
     if c.strip()
 ) or frozenset({"h264"})
-CODEC_UNKNOWN_VIDEO_MESSAGE = os.getenv(
-    "RTSP_CODEC_UNKNOWN_VIDEO_MESSAGE",
-    "Видеопоток H.264 не обнаружен (кодек не определён)",
-)
-CODEC_REJECT_MESSAGE = os.getenv(
-    "RTSP_CODEC_REJECT_MESSAGE",
-    "Требуется H.264, обнаружен кодек: {codec}",
-)
+# Текст в колонке «Ошибка» при отсутствии H.264 или неопределённом видеокодеке (без детализации кодека).
+REQUIRED_H264_ERROR_TEXT = os.getenv("RTSP_REQUIRED_H264_ERROR_TEXT", "Требуется H.264")
 # Префикс-код, который ставится в колонку «Ошибка» для любой offline-камеры.
 OFFLINE_ERROR_CODE = os.getenv("RTSP_OFFLINE_ERROR_CODE", "0x00")
 # 24 потока на ~5000 камер — около ~3,5 минут на полный цикл при NORMAL=5с.

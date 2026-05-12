@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
 )
 
+from app import config
 from app.database.models import CameraModel
 from app.ui.constants import (
     CELL_PREVIEW_LIMIT,
@@ -21,6 +22,18 @@ from app.ui.constants import (
 from app.ui.widgets.status_badge import status_item
 from app.utils.datetime_utils import iso_to_human
 from app.utils.validators import mask_rtsp_url
+
+
+def _is_required_h264_error_text(text: Optional[str]) -> bool:
+    """Сообщение про обязательный H.264 (с учётом префикса OFFLINE_ERROR_CODE)."""
+    t = (text or "").strip()
+    msg = config.REQUIRED_H264_ERROR_TEXT
+    if t == msg:
+        return True
+    code = (config.OFFLINE_ERROR_CODE or "").strip()
+    if code and t.startswith(code):
+        return t[len(code) :].strip() == msg
+    return False
 
 
 # Поля для массового редактирования: (label, key)
@@ -252,8 +265,11 @@ class CameraTable(QTableWidget):
         self._set_hover_tooltip(checked_item, checked_text)
         self.setItem(row, self.COL_CHECKED, checked_item)
 
-        err_item = QTableWidgetItem(cam.last_error or "")
+        err_raw = cam.last_error or ""
+        err_item = QTableWidgetItem(err_raw)
         self._set_hover_tooltip(err_item, cam.last_error)
+        if _is_required_h264_error_text(err_raw):
+            err_item.setForeground(QBrush(QColor(PING_BLOCKED_COLOR)))
         self.setItem(row, self.COL_ERR, err_item)
 
         rtsp_item = QTableWidgetItem(mask_rtsp_url(cam.rtsp_url))

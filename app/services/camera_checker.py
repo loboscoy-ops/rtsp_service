@@ -179,14 +179,14 @@ class CameraCheckWorker(QRunnable):
             if not raw:
                 return _ProbeOutcome(
                     kind="error",
-                    error=config.CODEC_UNKNOWN_VIDEO_MESSAGE,
+                    error=config.REQUIRED_H264_ERROR_TEXT,
                 )
             codec = raw.splitlines()[0].strip()
             if codec in config.REQUIRED_VIDEO_CODECS:
                 return _ProbeOutcome(kind="online", error="")
             return _ProbeOutcome(
                 kind="error",
-                error=config.CODEC_REJECT_MESSAGE.format(codec=codec or "—"),
+                error=config.REQUIRED_H264_ERROR_TEXT,
             )
 
         err = (proc.stderr or proc.stdout or f"Код {proc.returncode}").strip()
