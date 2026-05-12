@@ -159,6 +159,12 @@ class CameraTable(QTableWidget):
     # ------------------------------------------------------------------
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            cam_id = self.selected_camera_id()
+            if cam_id is not None:
+                self.open_requested.emit(cam_id)
+                event.accept()
+                return
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             ids = self.selected_camera_ids()
             if len(ids) > 1:

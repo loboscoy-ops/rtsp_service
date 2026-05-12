@@ -4,6 +4,8 @@ from __future__ import annotations
 import html
 import json
 import logging
+import math
+from collections import defaultdict
 from typing import TYPE_CHECKING, Optional
 
 from PySide6.QtCore import QUrl, Signal
@@ -36,6 +38,33 @@ OPEN_HOST = "open"
 OBJECT_HOST = "object"
 
 
+def _jitter_duplicate_marker_positions(markers: list[dict]) -> None:
+    """Сдвигаем маркеры с одинаковыми координатами по маленькому кругу.
+
+    Иначе десяток камер с одним GPS лежит одним «бубликом», на карте видно
+    меньше точек, чем строк в таблице — пользователь воспринимает это как
+    расхождение количества.
+    """
+    if len(markers) <= 1:
+        return
+    buckets: dict[tuple[float, float], list[dict]] = defaultdict(list)
+    for m in markers:
+        key = (round(m["lat"], 6), round(m["lon"], 6))
+        buckets[key].append(m)
+    # ~3 м шаг по экватору; достаточно, чтобы кружки перестали совпадать.
+    radius_deg = 2.8e-5
+    for items in buckets.values():
+        if len(items) <= 1:
+            continue
+        base_lat = items[0]["lat"]
+        base_lon = items[0]["lon"]
+        n = len(items)
+        for i, m in enumerate(items):
+            ang = (2 * math.pi * i) / n
+            m["lat"] = base_lat + radius_deg * math.sin(ang)
+            m["lon"] = base_lon + radius_deg * math.cos(ang)
+
+
 def markers_payload(cameras: list["CameraModel"]) -> list[dict]:
     """Маркеры по камерам (для основного раздела «Карта» и дашборда)."""
     from app.utils.gps_parse import parse_lat_lon
@@ -60,6 +89,7 @@ def markers_payload(cameras: list["CameraModel"]) -> list[dict]:
                 "uin": (cam.uin or "").strip(),
             }
         )
+    _jitter_duplicate_marker_positions(out)
     return out
 
 
@@ -156,6 +186,7 @@ def leaflet_html(
     cluster: bool = False,
     cluster_radius: int = 60,
     dashboard_hover: bool = False,
+    map_overlay: dict | None = None,
 ) -> str:
     """HTML страницы с интерактивной картой Leaflet.
 
@@ -166,9 +197,11 @@ def leaflet_html(
     При ``cluster=True`` маркеры группируются через Leaflet.markercluster.
 
     ``dashboard_hover=True`` — на карте дашборда при наведении показывается
-    интерактивная «плашка»: имя объекта, УИН и кнопка перехода в таблицу;
-    кластеры при этом окрашиваются по доле online: зелёный (100%% online),
-    жёлтый (от 30%% до &lt;100%%), красный (&lt;30%% online).
+    плашка с именем объекта и УИН (без кнопок); кластеры окрашиваются по доле
+    online; по клику на кластер карта масштабируется под его границы.
+
+    ``map_overlay`` — словарь {{mapped, total, no_gps}} для подписи
+    «На карте точек: … из …».
     """
     # Вставляем как JS-литерал; \u003c — чтобы случайный "</" в данных не закрыл <script>.
     markers_json = json.dumps(markers, ensure_ascii=False)
@@ -216,6 +249,7 @@ def leaflet_html(
     )
     cluster_flag = "true" if cluster else "false"
     dash_hover_flag = "true" if dashboard_hover else "false"
+    overlay_json = json.dumps(map_overlay, ensure_ascii=False) if map_overlay is not None else "null"
 
     return f"""<!DOCTYPE html>
 <html><head>
@@ -295,19 +329,6 @@ html, body, #map {{ height: 100%; margin: 0; padding: 0; background: {body_bg}; 
 .cam-hover .hover-uin.muted {{
   font-style: italic;
 }}
-.cam-hover .hover-open-link {{
-  display: inline-block;
-  padding: 6px 12px;
-  background: #3d8bfd;
-  color: #ffffff !important;
-  border-radius: 6px;
-  text-decoration: none;
-  font-weight: 600;
-  font-size: 13px;
-}}
-.cam-hover .hover-open-link:hover {{
-  background: #5a9dff;
-}}
 .cam-hover-stack {{
   padding: 10px 12px;
   min-width: 200px;
@@ -342,6 +363,23 @@ html, body, #map {{ height: 100%; margin: 0; padding: 0; background: {body_bg}; 
   background-color: #6b7280;
   color: #ffffff;
 }}
+.map-stats-overlay {{
+  position: absolute;
+  top: 10px;
+  right: 52px;
+  z-index: 1000;
+  max-width: 280px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.35;
+  pointer-events: none;
+  border: 1px solid {popup_border};
+  background: {popup_bg};
+  color: {popup_fg};
+  opacity: 0.96;
+  box-shadow: 0 1px 6px rgba(0,0,0,.12);
+}}
 </style>
 </head><body>
 <div id="map"></div>
@@ -362,14 +400,12 @@ function statusClass(s) {{
 }}
 const dashHover = {dash_hover_flag};
 
-function buildHoverPanel(objName, uin, objectId) {{
+function buildHoverPanel(objName, uin, _objectId) {{
   const title = '<div class="hover-title">' + escHtml(objName || 'Объект') + '</div>';
   const uinDiv = uin
     ? '<div class="hover-uin">УИН: ' + escHtml(uin) + '</div>'
     : '<div class="hover-uin muted">УИН не указан</div>';
-  const btn = '<a class="hover-open-link" href="' + objectLink(objectId) + '">'
-    + 'Перейти в таблицу объекта</a>';
-  return '<div class="cam-hover">' + title + uinDiv + btn + '</div>';
+  return '<div class="cam-hover">' + title + uinDiv + '</div>';
 }}
 
 function attachDashboardHover(marker, m) {{
@@ -380,7 +416,7 @@ function attachDashboardHover(marker, m) {{
       sticky: true,
       direction: 'auto',
       opacity: 1,
-      interactive: true,
+      interactive: false,
       className: 'cam-hover-tip'
     }}
   );
@@ -410,7 +446,7 @@ function bindClusterDashboardHover(layer) {{
       sticky: true,
       direction: 'auto',
       opacity: 1,
-      interactive: true,
+      interactive: false,
       className: 'cam-hover-tip'
     }}).openTooltip();
   }});
@@ -418,6 +454,18 @@ function bindClusterDashboardHover(layer) {{
     const cluster = ev.layer;
     cluster.closeTooltip();
     cluster.unbindTooltip();
+  }});
+}}
+
+/** Клик по кластеру на дашборде — приблизить карту к границам площадки. */
+function bindClusterDashboardClick(layer) {{
+  if (!dashHover || !useCluster) return;
+  layer.on('clusterclick', function (ev) {{
+    const cluster = ev.layer;
+    const b = cluster.getBounds();
+    if (b.isValid()) {{
+      map.fitBounds(b.pad(0.38));
+    }}
   }});
 }}
 
@@ -482,7 +530,8 @@ const clusterOpts = {{
   showCoverageOnHover: false,
   spiderfyOnMaxZoom: true,
   disableClusteringAtZoom: 17,
-  maxClusterRadius: {cluster_radius}
+  maxClusterRadius: {cluster_radius},
+  zoomToBoundsOnClick: !(useCluster && dashHover)
 }};
 if (useCluster && dashHover) {{
   clusterOpts.iconCreateFunction = dashClusterIconCreate;
@@ -493,7 +542,21 @@ const featureGroup = useCluster
 
 if (useCluster && dashHover) {{
   bindClusterDashboardHover(featureGroup);
+  bindClusterDashboardClick(featureGroup);
 }}
+
+(function installMapOverlay() {{
+  const data = {overlay_json};
+  if (!data || typeof data.total !== 'number' || data.total <= 0) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'map-stats-overlay';
+  let text = 'На карте точек: ' + data.mapped + ' из ' + data.total;
+  if (data.no_gps > 0) {{
+    text += ' (' + data.no_gps + ' без координат)';
+  }}
+  wrap.textContent = text;
+  map.getContainer().appendChild(wrap);
+}})();
 function buildIcon(num, status, kind) {{
   const size = (kind === 'object') ? 36 : 26;
   const inner = (kind === 'object') ? 32 : 22;
@@ -519,21 +582,14 @@ function buildPopup(m) {{
     return '<div class="cam-popup">'
          + '<b>' + escHtml(m.name) + '</b><br/>'
          + uin
-         + '<small>Камер: ' + m.num + '</small><br/>'
-         + '<a class="open-link" href="' + objectLink(m.id) + '">'
-         + 'Перейти в таблицу объекта</a>'
+         + '<small>Камер: ' + m.num + '</small>'
          + '</div>';
   }}
-  const objLink = (typeof m.object_id === 'number')
-    ? '<a class="open-link open-link-secondary" href="'
-        + objectLink(m.object_id) + '">Перейти к объекту</a>'
-    : '';
   return '<div class="cam-popup">'
        + '<b>№' + m.num + '</b> — ' + escHtml(m.name) + '<br/>'
        + escHtml(m.object) + '<br/>'
        + '<small>' + escHtml(m.status) + '</small><br/>'
        + '<a class="open-link" href="' + openLink(m.id) + '">Запустить RTSP</a>'
-       + objLink
        + '<span class="hint">Двойной клик по маркеру — то же самое</span>'
        + '</div>';
 }}
@@ -550,7 +606,8 @@ function addMarker(m) {{
   attachDashboardHover(marker, m);
   marker.on('dblclick', function (ev) {{
     L.DomEvent.stopPropagation(ev);
-    window.location.href = (m.kind === 'object') ? objectLink(m.id) : openLink(m.id);
+    if (m.kind === 'object') {{ return; }}
+    window.location.href = openLink(m.id);
   }});
   marker.addTo(featureGroup);
   markerById[m.id] = marker;
@@ -785,6 +842,11 @@ class CameraMapView(QWidget):
                 cluster=self._cluster,
                 cluster_radius=80,
                 dashboard_hover=self._dashboard_hover,
+                map_overlay={
+                    "mapped": len(markers),
+                    "total": total,
+                    "no_gps": max(0, total - len(markers)),
+                },
             ),
             QUrl("https://local.map/"),
         )
