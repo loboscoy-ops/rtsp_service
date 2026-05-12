@@ -174,8 +174,20 @@ class CameraCheckWorker(QRunnable):
         except Exception as exc:
             return _ProbeOutcome(kind="exception", error=str(exc))
 
-        if proc.returncode == 0 and proc.stdout.strip():
-            return _ProbeOutcome(kind="online", error="")
+        if proc.returncode == 0:
+            raw = (proc.stdout or "").strip().lower()
+            if not raw:
+                return _ProbeOutcome(
+                    kind="error",
+                    error=config.CODEC_UNKNOWN_VIDEO_MESSAGE,
+                )
+            codec = raw.splitlines()[0].strip()
+            if codec in config.REQUIRED_VIDEO_CODECS:
+                return _ProbeOutcome(kind="online", error="")
+            return _ProbeOutcome(
+                kind="error",
+                error=config.CODEC_REJECT_MESSAGE.format(codec=codec or "—"),
+            )
 
         err = (proc.stderr or proc.stdout or f"Код {proc.returncode}").strip()
         if _looks_like_timeout(err):
@@ -195,7 +207,8 @@ class CameraCheckWorker(QRunnable):
             "-rtsp_transport", transport,
             "-rw_timeout", timeout_us,
             "-timeout", timeout_us,
-            "-show_entries", "format=format_name",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=codec_name",
             "-of", "default=nw=1:nk=1",
             url,
         ]

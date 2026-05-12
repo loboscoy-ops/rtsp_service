@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 APP_NAME = "Urus Camera Monitor"
-APP_VERSION = "0.1.72"
+APP_VERSION = "0.1.73"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 IS_FROZEN = bool(getattr(sys, "frozen", False))
@@ -71,6 +71,21 @@ CHECK_DEEP_TIMEOUT_SEC = int(os.getenv("RTSP_CHECK_DEEP_TIMEOUT_SEC", "12"))
 CHECK_TIMEOUT_FAIL_MESSAGE = os.getenv(
     "RTSP_CHECK_TIMEOUT_FAIL_MESSAGE",
     "RTSP не подключается > 30 сек",
+)
+# Допустимые кодеки первого видеопотока (ffprobe stream=codec_name), через запятую.
+_raw_codecs = os.getenv("RTSP_REQUIRED_VIDEO_CODECS", "h264").strip()
+REQUIRED_VIDEO_CODECS = frozenset(
+    c.strip().lower()
+    for c in (_raw_codecs.split(",") if _raw_codecs else ["h264"])
+    if c.strip()
+) or frozenset({"h264"})
+CODEC_UNKNOWN_VIDEO_MESSAGE = os.getenv(
+    "RTSP_CODEC_UNKNOWN_VIDEO_MESSAGE",
+    "Видеопоток H.264 не обнаружен (кодек не определён)",
+)
+CODEC_REJECT_MESSAGE = os.getenv(
+    "RTSP_CODEC_REJECT_MESSAGE",
+    "Требуется H.264, обнаружен кодек: {codec}",
 )
 # Префикс-код, который ставится в колонку «Ошибка» для любой offline-камеры.
 OFFLINE_ERROR_CODE = os.getenv("RTSP_OFFLINE_ERROR_CODE", "0x00")

@@ -97,7 +97,8 @@ class MainWindow(QMainWindow):
         self._active_checks: dict[int, str] = {}
         self._recent_poll_events: deque[str] = deque(maxlen=5)
         self._priority_object_id: int | None = None
-        self._poll_local_mode: bool = False
+        # Текст «Опрос:» при активных проверках: full | local | auto
+        self._poll_ui: str | None = None
 
         self.setWindowTitle(f"{config.APP_NAME} v.{config.APP_VERSION}")
         self.resize(*WINDOW_DEFAULT_SIZE)
@@ -545,13 +546,19 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "poll_activity"):
             return
         if not self._active_checks:
-            self._poll_local_mode = False
+            self._poll_ui = None
             self.poll_activity.setText("Жду опроса")
             self.poll_activity.setStyleSheet(
                 "QLineEdit { color: #2d9d5f; font-weight: 700; }"
             )
             return
-        if self._poll_local_mode:
+        if self._poll_ui == "full":
+            self.poll_activity.setText("Общая проверка")
+            self.poll_activity.setStyleSheet(
+                "QLineEdit { color: #eab308; font-weight: 600; }"
+            )
+            return
+        if self._poll_ui == "local":
             self.poll_activity.setText("Локальный опрос")
             self.poll_activity.setStyleSheet(
                 "QLineEdit { color: #eab308; font-weight: 600; }"
@@ -859,7 +866,7 @@ class MainWindow(QMainWindow):
 
     def _bulk_check(self, camera_ids: list[int]) -> None:
         cams = [c for c in (self.repo.get_camera(cid) for cid in camera_ids) if c]
-        self._start_checks(cams, f"Локальная проверка выделенных ({len(cams)})", local_poll=True)
+        self._start_checks(cams, f"Локальная проверка выделенных ({len(cams)})", poll_ui="local")
 
     def _bulk_delete(self, camera_ids: list[int]) -> None:
         if not camera_ids:
@@ -995,12 +1002,12 @@ class MainWindow(QMainWindow):
         cam = self.repo.get_camera(camera_id)
         if not cam:
             return
-        self._start_checks([cam], "Локальная проверка одной камеры", local_poll=True)
+        self._start_checks([cam], "Локальная проверка одной камеры", poll_ui="local")
 
     def _manual_check_all(self) -> None:
         cameras = self.repo.list_cameras(object_id=None, search="", status_filter="all")
         enabled = [c for c in cameras if c.enabled]
-        self._start_checks(enabled, "Ручная проверка всех объектов", local_poll=True)
+        self._start_checks(enabled, "Ручная проверка всех объектов", poll_ui="full")
 
     def _auto_check_offline_objects(self) -> None:
         if self._priority_object_id is not None:
@@ -1013,7 +1020,7 @@ class MainWindow(QMainWindow):
             int(c.object_id) for c in all_cameras if (c.status or "").lower() != "online"
         }
         target = [c for c in all_cameras if c.enabled and int(c.object_id) in bad_object_ids]
-        self._start_checks(target, "Автоопрос объектов с offline (каждые 3 мин)", local_poll=False)
+        self._start_checks(target, "Автоопрос объектов с offline (каждые 3 мин)", poll_ui="auto")
 
     def _auto_check_online_objects(self) -> None:
         if self._priority_object_id is not None:
@@ -1030,7 +1037,7 @@ class MainWindow(QMainWindow):
             for c in all_cameras
             if c.enabled and int(c.object_id) not in bad_object_ids
         ]
-        self._start_checks(target, "Автоопрос объектов без offline (каждые 10 мин)", local_poll=False)
+        self._start_checks(target, "Автоопрос объектов без offline (каждые 10 мин)", poll_ui="auto")
 
     def _on_priority_object_check_requested(self, object_id: int) -> None:
         cameras = self.repo.list_cameras(object_id=object_id, search="", status_filter="all")
@@ -1041,16 +1048,16 @@ class MainWindow(QMainWindow):
         self.checker.clear_pending()
         QThreadPool.globalInstance().clear()
         self._active_checks.clear()
-        self._start_checks(enabled, f"Приоритетный опрос объекта {object_id}", local_poll=True)
+        self._start_checks(enabled, f"Приоритетный опрос объекта {object_id}", poll_ui="local")
 
-    def _start_checks(self, cameras: list[CameraModel], reason: str, *, local_poll: bool = False) -> None:
+    def _start_checks(self, cameras: list[CameraModel], reason: str, *, poll_ui: str = "auto") -> None:
         if not cameras:
             self._log(f"{reason}: камер для опроса нет")
             self._render_poll_activity()
             if self._priority_object_id is not None:
                 self._finish_priority_mode()
             return
-        self._poll_local_mode = local_poll
+        self._poll_ui = poll_ui
         for cam in cameras:
             self._active_checks[int(cam.id)] = f"{cam.object_name} / {cam.camera_name}"
         self._render_poll_activity()
@@ -1170,7 +1177,7 @@ class MainWindow(QMainWindow):
             self._render_poll_activity()
         cameras = self.repo.list_cameras(object_id=None, search="", status_filter="all")
         enabled = [c for c in cameras if c.enabled]
-        self._start_checks(enabled, "Опрос после импорта формы", local_poll=True)
+        self._start_checks(enabled, "Опрос после импорта формы", poll_ui="local")
 
     # ==================================================================
     # close
