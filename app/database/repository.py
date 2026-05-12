@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import Counter
+
 from app.database.db import get_connection
 from app.database.models import CameraModel, ObjectModel
 from app.utils.datetime_utils import now_iso
@@ -296,16 +298,20 @@ class Repository:
             conn.execute("UPDATE objects SET updated_at = ? WHERE id = ?", (ts, object_id))
             return int(cur.lastrowid), "created"
 
-    def bulk_upsert_cameras(self, rows) -> tuple[int, int]:
+    def bulk_upsert_cameras(self, rows) -> tuple[int, int, str | None]:
         """Пакетный upsert набора камер за одно подключение/транзакцию.
 
         Объекты создаются по уникальным именам, ``object_id`` кэшируются,
         что устраняет N открытий SQLite на каждую строку при импорте больших
         Excel-файлов.
+
+        Третье значение — имя площадки для фокуса в UI после импорта: объект
+        с наибольшим числом строк в файле; при равенстве — первый в порядке
+        следования строк.
         """
         rows = list(rows)
         if not rows:
-            return 0, 0
+            return 0, 0, None
         created = 0
         updated = 0
         ts = now_iso()
@@ -381,7 +387,26 @@ class Repository:
                 conn.execute(
                     "UPDATE objects SET updated_at = ? WHERE id = ?", (ts, obj_id)
                 )
-        return created, updated
+
+        first_seen: list[str] = []
+        seen_names: set[str] = set()
+        for row in rows:
+            n = str(row.get("object_name", "")).strip()
+            if not n or n in seen_names:
+                continue
+            seen_names.add(n)
+            first_seen.append(n)
+        names_for_count = [
+            str(r.get("object_name", "")).strip() for r in rows if str(r.get("object_name", "")).strip()
+        ]
+        focus_object_name: str | None = None
+        if names_for_count:
+            counts = Counter(names_for_count)
+            best = max(counts.values())
+            top = {n for n, c in counts.items() if c == best}
+            focus_object_name = next((n for n in first_seen if n in top), next(iter(top)))
+
+        return created, updated, focus_object_name
 
     def bulk_update_field(self, camera_ids: list[int], field: str, value) -> int:
         """Массовое обновление одного поля у камер. Возвращает число затронутых строк."""

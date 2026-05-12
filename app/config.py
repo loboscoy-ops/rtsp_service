@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 APP_NAME = "Urus Camera Monitor"
-APP_VERSION = "0.1.76"
+APP_VERSION = "0.1.77"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 IS_FROZEN = bool(getattr(sys, "frozen", False))

@@ -467,10 +467,10 @@ class ImportService:
 
         return preview
 
-    def import_valid_rows(self, preview: ImportPreview) -> tuple[int, int]:
+    def import_valid_rows(self, preview: ImportPreview) -> tuple[int, int, str | None]:
         valid = preview.valid_rows
         if not valid:
-            return 0, 0
+            return 0, 0, None
         rows_payload: Iterable[dict] = (
             {
                 "object_name": row.object_name,

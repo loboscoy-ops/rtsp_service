@@ -69,7 +69,7 @@ class _Job(QRunnable):
 
 
 class ImportDialog(QDialog):
-    import_completed = Signal(int, int)
+    import_completed = Signal(int, int, object)
     _sheet_names_loaded = Signal(object)
     _sheet_loaded = Signal(object)
     _preview_ready = Signal(object)
@@ -442,13 +442,13 @@ class ImportDialog(QDialog):
 
     def _on_import_done(self, result_obj: object) -> None:
         self._set_busy(False)
-        created, updated = result_obj  # type: ignore[misc]
+        created, updated, focus_name = result_obj  # type: ignore[misc]
         QMessageBox.information(
             self,
             "Импорт завершен",
             f"Создано: {created}\nОбновлено: {updated}",
         )
-        self.import_completed.emit(created, updated)
+        self.import_completed.emit(created, updated, focus_name)
         self.accept()
 
     def _on_job_error(self, text: str) -> None:

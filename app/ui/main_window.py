@@ -358,14 +358,15 @@ class MainWindow(QMainWindow):
     def _cameras_bottom_area_max_height(self) -> int:
         """Максимальная высота нижнего блока (миникарта + ошибки) в разделе «Камеры».
 
-        Не больше трети высоты доступной области экрана, на котором окно показано.
+        Не больше трети высоты области контента главного окна (центральный виджет),
+        чтобы после импорта и подстройки таблицы блок не занимал половину окна.
         """
-        scr = self.screen()
-        if scr is None:
-            scr = QApplication.primaryScreen()
-        if scr is None:
-            return 400
-        return max(120, scr.availableGeometry().height() // 3)
+        cw = self.centralWidget()
+        if cw is not None and cw.height() > 0:
+            h = cw.height()
+        else:
+            h = max(1, self.height())
+        return max(120, h // 3)
 
     def _enforce_cameras_bottom_height_cap(self) -> None:
         if not hasattr(self, "_cameras_splitter") or not hasattr(self, "_cameras_bottom_pane"):
@@ -682,13 +683,18 @@ class MainWindow(QMainWindow):
     # data refresh
     # ==================================================================
 
-    def _refresh_objects(self) -> None:
+    def _refresh_objects(self, prefer_object_id: int | None = None) -> None:
         current_id = self.sidebar.current_object_id()
         objects = self.repo.list_objects()
         self.objects_cache = objects
         self.sidebar.populate(objects)
-        if current_id is not None:
-            self.sidebar.select_object(current_id)
+        pick: int | None = None
+        if prefer_object_id is not None and any(o.id == prefer_object_id for o in objects):
+            pick = prefer_object_id
+        elif current_id is not None and any(o.id == current_id for o in objects):
+            pick = current_id
+        if pick is not None:
+            self.sidebar.select_object(pick)
         elif objects:
             self.current_object_id = objects[0].id
 
@@ -1196,6 +1202,11 @@ class MainWindow(QMainWindow):
     # import dialog
     # ==================================================================
 
+    def _after_import_layout_adjust(self) -> None:
+        """После импорта: высота таблицы превью + жёсткий лимит нижнего блока (карта)."""
+        self._resize_cameras_splitter_for_visible_table_rows(IMPORT_TABLE_VISIBLE_ROWS)
+        self._enforce_cameras_bottom_height_cap()
+
     def _open_import_dialog(self) -> None:
         try:
             dlg = ImportDialog(self.import_service, self.template_service, self)
@@ -1210,15 +1221,22 @@ class MainWindow(QMainWindow):
         dlg.import_completed.connect(self._on_import_completed)
         dlg.exec()
 
-    def _on_import_completed(self, created: int, updated: int) -> None:
-        self._refresh_objects()
+    def _on_import_completed(
+        self, created: int, updated: int, focus_object_name: object = None,
+    ) -> None:
+        name = focus_object_name if isinstance(focus_object_name, str) else None
+        prefer_id: int | None = None
+        if name and name.strip():
+            key = name.strip().casefold()
+            for o in self.repo.list_objects():
+                if (o.name or "").strip().casefold() == key:
+                    prefer_id = int(o.id)
+                    break
+        self._refresh_objects(prefer_object_id=prefer_id)
         self._refresh_cameras()
         self._log(f"Импорт завершен. Создано={created}, обновлено={updated}")
         if created + updated > 0:
-            QTimer.singleShot(
-                50,
-                lambda: self._resize_cameras_splitter_for_visible_table_rows(IMPORT_TABLE_VISIBLE_ROWS),
-            )
+            QTimer.singleShot(50, self._after_import_layout_adjust)
         # По запросу: сразу после загрузки формы запускать опрос камер.
         if created + updated <= 0:
             return
