@@ -1,10 +1,74 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, Qt, Signal
-from PySide6.QtGui import QAction, QKeyEvent
-from PySide6.QtWidgets import QListWidget, QListWidgetItem, QMenu
+import html
+
+from PySide6.QtCore import QPoint, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import (
+    QAbstractTextDocumentLayout,
+    QAction,
+    QKeyEvent,
+    QPalette,
+    QTextDocument,
+)
+from PySide6.QtWidgets import (
+    QApplication,
+    QListWidget,
+    QListWidgetItem,
+    QMenu,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+)
 
 from app.database.models import ObjectModel
+from app.ui.constants import (
+    STATUS_OFFLINE_FG,
+    STATUS_ONLINE_FG,
+    THEME_FG,
+    THEME_FG_MUTED,
+)
+
+
+class _RichTextItemDelegate(QStyledItemDelegate):
+    """Рисует HTML из DisplayRole, чтобы Online/Offline были цветными."""
+
+    def paint(self, painter, option, index):  # noqa: D401
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        style = opt.widget.style() if opt.widget else QApplication.style()
+
+        text_html = opt.text or ""
+        opt.text = ""
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget)
+
+        doc = QTextDocument()
+        doc.setDefaultFont(opt.font)
+        doc.setHtml(text_html)
+        doc.setTextWidth(opt.rect.width() - 12)
+
+        painter.save()
+        painter.translate(opt.rect.x() + 6, opt.rect.y() + 4)
+        ctx = QAbstractTextDocumentLayout.PaintContext()
+        if opt.state & QStyle.StateFlag.State_Selected:
+            ctx.palette.setColor(
+                QPalette.ColorRole.Text,
+                opt.palette.highlightedText().color(),
+            )
+        clip = QRectF(0, 0, opt.rect.width() - 12, opt.rect.height() - 8)
+        ctx.clip = clip
+        painter.setClipRect(clip)
+        doc.documentLayout().draw(painter, ctx)
+        painter.restore()
+
+    def sizeHint(self, option, index):  # noqa: D401
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        doc = QTextDocument()
+        doc.setDefaultFont(opt.font)
+        doc.setHtml(opt.text or "")
+        width = opt.rect.width() if opt.rect.width() > 0 else 240
+        doc.setTextWidth(width - 12)
+        return QSize(int(doc.idealWidth()) + 12, int(doc.size().height()) + 8)
 
 
 class ObjectSidebar(QListWidget):
@@ -14,6 +78,7 @@ class ObjectSidebar(QListWidget):
 
     def __init__(self):
         super().__init__()
+        self.setItemDelegate(_RichTextItemDelegate(self))
         self.currentItemChanged.connect(self._on_current_changed)
         self.itemDoubleClicked.connect(self._on_item_double_clicked)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -23,10 +88,17 @@ class ObjectSidebar(QListWidget):
         self.blockSignals(True)
         self.clear()
         for obj in objects:
+            name = html.escape(obj.name or "")
             text = (
-                f"{obj.name}\n"
-                f"Камер: {obj.camera_count}  "
-                f"Online: {obj.online_count}  Offline: {obj.offline_count}"
+                f'<div style="color:{THEME_FG};font-weight:600;">{name}</div>'
+                f'<div style="margin-top:2px;">'
+                f'<span style="color:{THEME_FG_MUTED};">Камер: {obj.camera_count}  </span>'
+                f'<span style="color:{STATUS_ONLINE_FG};font-weight:600;">'
+                f'Online: {obj.online_count}</span>'
+                f'<span style="color:{THEME_FG_MUTED};">  </span>'
+                f'<span style="color:{STATUS_OFFLINE_FG};font-weight:600;">'
+                f'Offline: {obj.offline_count}</span>'
+                f'</div>'
             )
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, obj.id)
