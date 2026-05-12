@@ -291,8 +291,6 @@ html, body, #map {{ height: 100%; margin: 0; padding: 0; background: {body_bg}; 
   font-weight: 600;
 }}
 .cam-popup .open-link:hover {{ background: #2bb573; }}
-.cam-popup .open-link-secondary {{ background: #3d8bfd; }}
-.cam-popup .open-link-secondary:hover {{ background: #5a9dff; }}
 .cam-popup .hint {{
   display: block;
   margin-top: 4px;
@@ -718,8 +716,9 @@ class CameraMapView(QWidget):
         # Включаем только для дашбордной мини-карты, чтобы при общем виде
         # на регион камеры собирались в стопки с количеством.
         self._cluster = cluster
-        # Плашка при наведении (объект / УИН / кнопка) — только дашборд.
+        # Плашка при наведении на дашборде — только объект и УИН.
         self._dashboard_hover = dashboard_hover
+        self._map_html_generation = 0
         self._stack = QStackedWidget(self)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -835,20 +834,22 @@ class CameraMapView(QWidget):
         # Кластер — только если CameraMapView создан с cluster=True
         # (сейчас это только дашбордная мини-карта). Радиус — стандартный
         # Leaflet (80 px), чтобы стопки образовывались уже на уровне города.
+        self._map_html_generation += 1
+        html = leaflet_html(
+            markers,
+            dark=self._dark,
+            cluster=self._cluster,
+            cluster_radius=80,
+            dashboard_hover=self._dashboard_hover,
+            map_overlay={
+                "mapped": len(markers),
+                "total": total,
+                "no_gps": max(0, total - len(markers)),
+            },
+        )
         self._view.setHtml(
-            leaflet_html(
-                markers,
-                dark=self._dark,
-                cluster=self._cluster,
-                cluster_radius=80,
-                dashboard_hover=self._dashboard_hover,
-                map_overlay={
-                    "mapped": len(markers),
-                    "total": total,
-                    "no_gps": max(0, total - len(markers)),
-                },
-            ),
-            QUrl("https://local.map/"),
+            html,
+            QUrl(f"https://local.map/g{self._map_html_generation}/"),
         )
         self._stack.setCurrentWidget(self._view)
 
