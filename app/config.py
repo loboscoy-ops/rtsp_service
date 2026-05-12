@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 APP_NAME = "Urus Camera Monitor"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.69"
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 IS_FROZEN = bool(getattr(sys, "frozen", False))
@@ -83,10 +83,4 @@ FFPLAY_BIN = os.getenv("RTSP_FFPLAY_BIN", "ffplay")
 
 # Seed demo data on first launch if DB is empty.
 SEED_ON_EMPTY = os.getenv("RTSP_SEED_ON_EMPTY", "1") == "1"
-
-# Тестовый режим ветки test_design: синтетический дашборд на 400 площадок.
-TEST_DESIGN_EMULATION = os.getenv("RTSP_TEST_DESIGN_EMULATION", "1") == "1"
-TEST_DESIGN_OBJECTS = int(os.getenv("RTSP_TEST_DESIGN_OBJECTS", "400"))
-TEST_DESIGN_CAMERAS_MIN = int(os.getenv("RTSP_TEST_DESIGN_CAMERAS_MIN", "6"))
-TEST_DESIGN_CAMERAS_MAX = int(os.getenv("RTSP_TEST_DESIGN_CAMERAS_MAX", "10"))
 
